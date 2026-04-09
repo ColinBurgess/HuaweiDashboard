@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { io } from 'socket.io-client';
+import houseBackground from '../HouseBackground2.png';
 import { 
   Zap, 
   Sun, 
@@ -13,6 +14,8 @@ import {
   CheckCircle2,
   Clock,
   TrendingUp,
+  Home,
+  Car,
   ArrowUpRight,
   ArrowDownRight
 } from 'lucide-react';
@@ -159,6 +162,19 @@ export default function App() {
     return history.slice(-timeRange);
   }, [history, historicalData, selectedDay, timeRange]);
 
+  const solarPower = Math.max(data?.activePower ?? 0, 0);
+  const houseLoad = Math.max(data?.houseLoad ?? 0, 0);
+  const gridExport = Math.max(data?.gridPower ?? 0, 0);
+  const gridImport = Math.max(-(data?.gridPower ?? 0), 0);
+  const batteryChargePower = Math.max(-(data?.batteryPower ?? 0), 0);
+  const carChargePower = 0;
+
+  const isSolarToHouseActive = Math.min(solarPower, houseLoad) > 0;
+  const isSolarToGridActive = gridExport > 0;
+  const isGridToHouseActive = gridImport > 0;
+  const isSolarToBatteryActive = batteryChargePower > 0;
+  const isHouseToCarActive = carChargePower > 0;
+
 
   const timeRanges = [
     { label: '1m', value: 30 },
@@ -237,22 +253,181 @@ export default function App() {
 
         {/* Energy Flow Visualization */}
         <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-          <h3 className="font-semibold text-gray-200 mb-8 flex items-center gap-2">
+          <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
             <RefreshCcw className="w-4 h-4 text-green-500" />
             Energy Flow
           </h3>
-          <div className="flex flex-col md:flex-row items-center justify-around gap-8 py-4">
-             <FlowItem label="Solar" value={data?.activePower ?? 0} icon={<Sun className="w-8 h-8 text-yellow-400" />} color="yellow" />
-             <div className="hidden md:block w-12 h-px bg-white/10" />
-             <FlowItem label="Inverter" value={data?.activePower ?? 0} icon={<Zap className="w-8 h-8 text-green-400" />} color="green" />
-             <div className="hidden md:block w-12 h-px bg-white/10" />
-             <div className="flex flex-col gap-8">
-                  <FlowItem label="House" value={data?.houseLoad ?? 0} icon={<Activity className="w-8 h-8 text-blue-400" />} color="blue" />
-                <FlowItem label="Grid" value={Math.abs(data?.gridPower ?? 0)} icon={<TrendingUp className={cn("w-8 h-8", (data?.gridPower ?? 0) >= 0 ? "text-green-400" : "text-red-400")} />} color={(data?.gridPower ?? 0) >= 0 ? "green" : "red"} />
-                {data && data.batterySOC > 0 && (
-                  <FlowItem label="Battery" value={Math.abs(data.batteryPower)} icon={<Battery className={cn("w-8 h-8", data.batteryPower >= 0 ? "text-green-400" : "text-blue-400")} />} color={data.batteryPower >= 0 ? "green" : "blue"} />
-                )}
-             </div>
+          <div className="relative rounded-2xl border border-white/10 overflow-hidden bg-black min-h-[280px] md:min-h-0 md:aspect-[1850/768]">
+            <img
+              src={houseBackground}
+              alt="Smart house energy layout"
+              className="absolute inset-0 w-full h-full object-contain object-center"
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#060c13]/44 to-[#060c13]/30" />
+            <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(0,0,0,0.62)_0%,rgba(0,0,0,0.18)_18%,rgba(0,0,0,0.04)_50%,rgba(0,0,0,0.18)_82%,rgba(0,0,0,0.62)_100%)]" />
+            <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_10%_8%,rgba(250,204,21,0.12),transparent_38%),radial-gradient(circle_at_83%_20%,rgba(34,211,238,0.14),transparent_45%),radial-gradient(circle_at_60%_92%,rgba(52,211,153,0.08),transparent_40%)]" />
+
+            <svg className="absolute inset-0 w-full h-full z-[5] pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              {!isSolarToHouseActive && (
+                <line
+                  x1="50"
+                  y1="15"
+                  x2="50"
+                  y2="52"
+                  className="flow-line-guide"
+                />
+              )}
+
+              {isSolarToHouseActive && (
+                <>
+                  <line
+                    x1="50"
+                    y1="15"
+                    x2="50"
+                    y2="52"
+                    className="flow-line-green"
+                  />
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L50 52" />
+                  </circle>
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L50 52" />
+                  </circle>
+                </>
+              )}
+
+              {isSolarToGridActive && (
+                <>
+                  <line
+                    x1="50"
+                    y1="15"
+                    x2="74"
+                    y2="15"
+                    className="flow-line-green"
+                  />
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L74 15" />
+                  </circle>
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L74 15" />
+                  </circle>
+                </>
+              )}
+
+              {!isGridToHouseActive && (
+                <path
+                  d="M74 15 L58 15 L58 58 L50 58"
+                  className="flow-line-guide"
+                />
+              )}
+
+              {isGridToHouseActive && (
+                <>
+                  <path
+                    d="M74 15 L58 15 L58 58 L50 58"
+                    className="flow-line-red"
+                  />
+                  <circle r="0.9" className="flow-dot-red">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M74 15 L58 15 L58 58 L50 58" />
+                  </circle>
+                  <circle r="0.9" className="flow-dot-red">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M74 15 L58 15 L58 58 L50 58" />
+                  </circle>
+                </>
+              )}
+
+              {!isSolarToBatteryActive && (
+                <path
+                  d="M50 15 L14 15 L14 55 L22 55"
+                  className="flow-line-guide"
+                />
+              )}
+
+              {isSolarToBatteryActive && (
+                <>
+                  <path
+                    d="M50 15 L14 15 L14 55 L22 55"
+                    className="flow-line-green"
+                  />
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L14 15 L14 55 L22 55" />
+                  </circle>
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L14 15 L14 55 L22 55" />
+                  </circle>
+                </>
+              )}
+
+              {!isHouseToCarActive && (
+                <path
+                  d="M50 52 L50 61 L75 61"
+                  className="flow-line-guide"
+                />
+              )}
+
+              {isHouseToCarActive && (
+                <>
+                  <path
+                    d="M50 52 L50 61 L75 61"
+                    className="flow-line-green"
+                  />
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 52 L50 61 L75 61" />
+                  </circle>
+                  <circle r="0.9" className="flow-dot-green">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 52 L50 61 L75 61" />
+                  </circle>
+                </>
+              )}
+            </svg>
+
+            <EnergyNode
+              label="Solar"
+              value={data?.activePower ?? 0}
+              icon={<Sun className="w-5 h-5 text-yellow-300" />}
+              tone="yellow"
+              className="left-[50%] top-[15%]"
+            />
+
+            <EnergyNode
+              label="House"
+              value={data?.houseLoad ?? 0}
+              icon={<Home className="w-5 h-5 text-blue-300" />}
+              tone="blue"
+              className="left-[50%] top-[52%]"
+            />
+
+            <EnergyNode
+              label="Grid"
+              value={Math.abs(data?.gridPower ?? 0)}
+              icon={<TrendingUp className={cn("w-5 h-5", (data?.gridPower ?? 0) >= 0 ? "text-green-300" : "text-red-300")} />}
+              tone={(data?.gridPower ?? 0) >= 0 ? 'green' : 'red'}
+              className="left-[74%] top-[15%]"
+              subtitle={(data?.gridPower ?? 0) >= 0 ? 'Exporting' : 'Importing'}
+            />
+
+            <EnergyNode
+              label="Battery"
+              value={Math.abs(data?.batteryPower ?? 0)}
+              icon={<Battery className={cn("w-5 h-5", (data?.batteryPower ?? 0) >= 0 ? "text-green-300" : "text-blue-300")} />}
+              tone={(data?.batterySOC ?? 0) > 0 ? ((data?.batteryPower ?? 0) >= 0 ? 'green' : 'blue') : 'gray'}
+              className="left-[22%] top-[55%]"
+              subtitle={(data?.batterySOC ?? 0) > 0 ? ((data?.batteryPower ?? 0) >= 0 ? 'Discharging' : 'Charging') : 'Not installed yet'}
+            />
+
+            <EnergyNode
+              label="Car"
+              value={0}
+              icon={<Car className="w-5 h-5 text-cyan-300" />}
+              tone="gray"
+              className="left-[75%] top-[58%]"
+              subtitle="Meter pending"
+            />
+
+            <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-white/55">
+              <span>Layout mode: Asset Positioning</span>
+              <span className="hidden md:inline">Flow overlays: Planned</span>
+            </div>
           </div>
         </div>
 
@@ -465,23 +640,40 @@ function StatCard({ title, value, unit, icon, trend, subtitle }: { title: string
   );
 }
 
-function FlowItem({ label, value, icon, color }: { label: string; value: number; icon: React.ReactNode; color: string }) {
-  const colorClasses: Record<string, string> = {
-    yellow: "bg-yellow-500/10 border-yellow-500/20 text-yellow-400",
-    green: "bg-green-500/10 border-green-500/20 text-green-400",
-    blue: "bg-blue-500/10 border-blue-500/20 text-blue-400",
-    red: "bg-red-500/10 border-red-500/20 text-red-400",
-    gray: "bg-gray-500/10 border-gray-500/20 text-gray-500",
+function EnergyNode({
+  label,
+  value,
+  icon,
+  tone,
+  className,
+  subtitle,
+}: {
+  label: string;
+  value: number;
+  icon: React.ReactNode;
+  tone: 'yellow' | 'green' | 'blue' | 'red' | 'gray';
+  className: string;
+  subtitle?: string;
+}) {
+  const toneClasses: Record<string, string> = {
+    yellow: 'border-yellow-400/45 bg-yellow-300/12 shadow-[0_0_40px_rgba(250,204,21,0.28)]',
+    green: 'border-emerald-400/45 bg-emerald-300/12 shadow-[0_0_40px_rgba(16,185,129,0.28)]',
+    blue: 'border-cyan-300/45 bg-cyan-300/12 shadow-[0_0_40px_rgba(34,211,238,0.28)]',
+    red: 'border-rose-400/45 bg-rose-300/12 shadow-[0_0_40px_rgba(244,63,94,0.28)]',
+    gray: 'border-slate-300/45 bg-slate-300/12 shadow-[0_0_40px_rgba(148,163,184,0.28)]',
   };
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className={cn("w-16 h-16 rounded-2xl flex items-center justify-center border", colorClasses[color])}>
-        {icon}
-      </div>
-      <div className="text-center">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{label}</p>
-        <p className="text-sm font-mono font-bold">{value.toFixed(0)} W</p>
+    <div className={cn('absolute -translate-x-1/2 -translate-y-1/2 z-10', className)}>
+      <div className="rounded-xl border border-white/20 bg-black/55 backdrop-blur-md px-3 py-2 min-w-[110px]">
+        <div className="flex items-center gap-2 mb-1">
+          <div className={cn('w-8 h-8 rounded-lg border flex items-center justify-center', toneClasses[tone])}>{icon}</div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest uppercase text-white/70">{label}</p>
+            <p className="text-sm font-mono font-bold text-white">{value.toFixed(0)} W</p>
+          </div>
+        </div>
+        {subtitle && <p className="text-[10px] uppercase tracking-wider text-white/55">{subtitle}</p>}
       </div>
     </div>
   );
