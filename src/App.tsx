@@ -1,14 +1,14 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import houseBackground from '../HouseBackground2.png';
-import { 
-  Zap, 
-  Sun, 
-  Activity, 
-  Thermometer, 
-  Battery, 
-  Cpu, 
-  Info, 
+import {
+  Zap,
+  Sun,
+  Activity,
+  Thermometer,
+  Battery,
+  Cpu,
+  Info,
   RefreshCcw,
   AlertCircle,
   CheckCircle2,
@@ -19,14 +19,14 @@ import {
   ArrowUpRight,
   ArrowDownRight
 } from 'lucide-react';
-import { 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer 
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer
 } from 'recharts';
 import { cn } from './lib/utils';
 
@@ -59,7 +59,29 @@ interface InverterData {
 interface HistoryPoint {
   time: string;
   power: number;
+  pv1Power: number;
+  pv2Power: number;
   consumption: number;
+}
+
+function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number): { pv1Power: number; pv2Power: number } {
+  const safeTotal = Math.max(0, totalPower);
+  const safePv1 = Math.max(0, pv1Raw);
+  const safePv2 = Math.max(0, pv2Raw);
+  const rawSum = safePv1 + safePv2;
+
+  if (safeTotal <= 0) {
+    return { pv1Power: 0, pv2Power: 0 };
+  }
+
+  if (rawSum <= 0) {
+    // Fallback when no per-string measurements are available.
+    return { pv1Power: safeTotal, pv2Power: 0 };
+  }
+
+  const pv1Power = safeTotal * (safePv1 / rawSum);
+  const pv2Power = Math.max(0, safeTotal - pv1Power);
+  return { pv1Power, pv2Power };
 }
 
 const STATUS_MAP: Record<number, { label: string; color: string }> = {
@@ -99,10 +121,17 @@ export default function App() {
       setHistory(prev => {
         const now = new Date();
         const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const newHistory = [...prev, { 
-          time: timeStr, 
+        const strings = composeStringPowers(
+          newData.activePower,
+          newData.pv1Voltage * newData.pv1Current,
+          newData.pv2Voltage * newData.pv2Current,
+        );
+        const newHistory = [...prev, {
+          time: timeStr,
           power: newData.activePower,
-          consumption: newData.consumption 
+          pv1Power: strings.pv1Power,
+          pv2Power: strings.pv2Power,
+          consumption: newData.consumption
         }];
         // Keep last 1800 points (approx 1 hour at 2s poll rate)
         return newHistory.slice(-1800);
@@ -133,11 +162,21 @@ export default function App() {
       const res = await fetch(`/api/history/${day}`);
       const data = await res.json();
       // Map JSONL fields to HistoryPoint
-      const points = data.map((d: any) => ({
-        time: new Date(d.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        power: d.power,
-        consumption: d.consumption
-      }));
+      const points = data.map((d: any) => {
+        const strings = composeStringPowers(
+          d.power,
+          d.pv1Power ?? ((d.pv1Voltage ?? 0) * (d.pv1Current ?? 0)),
+          d.pv2Power ?? ((d.pv2Voltage ?? 0) * (d.pv2Current ?? 0)),
+        );
+
+        return {
+          time: new Date(d.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          power: d.power,
+          pv1Power: strings.pv1Power,
+          pv2Power: strings.pv2Power,
+          consumption: d.consumption,
+        };
+      });
       setHistoricalData(points);
     } catch (e) {
       console.error('Failed to load history', e);
@@ -162,12 +201,37 @@ export default function App() {
     return history.slice(-timeRange);
   }, [history, historicalData, selectedDay, timeRange]);
 
+  const chartData = useMemo(() => {
+    const livePv1Raw = (data?.pv1Voltage ?? 0) * (data?.pv1Current ?? 0);
+    const livePv2Raw = (data?.pv2Voltage ?? 0) * (data?.pv2Current ?? 0);
+
+    return filteredHistory.map((point) => {
+      const hasPv1 = Number.isFinite(point.pv1Power);
+      const hasPv2 = Number.isFinite(point.pv2Power);
+      if (hasPv1 && hasPv2) {
+        return point;
+      }
+
+      const fallback = composeStringPowers(point.power, livePv1Raw, livePv2Raw);
+      return {
+        ...point,
+        pv1Power: fallback.pv1Power,
+        pv2Power: fallback.pv2Power,
+      };
+    });
+  }, [filteredHistory, data?.pv1Voltage, data?.pv1Current, data?.pv2Voltage, data?.pv2Current]);
+
   const solarPower = Math.max(data?.activePower ?? 0, 0);
   const houseLoad = Math.max(data?.houseLoad ?? 0, 0);
   const gridExport = Math.max(data?.gridPower ?? 0, 0);
   const gridImport = Math.max(-(data?.gridPower ?? 0), 0);
   const batteryChargePower = Math.max(-(data?.batteryPower ?? 0), 0);
   const carChargePower = 0;
+  const liveSolarSplit = composeStringPowers(
+    solarPower,
+    (data?.pv1Voltage ?? 0) * (data?.pv1Current ?? 0),
+    (data?.pv2Voltage ?? 0) * (data?.pv2Current ?? 0),
+  );
 
   const isSolarToHouseActive = Math.min(solarPower, houseLoad) > 0;
   const isSolarToGridActive = gridExport > 0;
@@ -219,33 +283,33 @@ export default function App() {
       <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         {/* Top Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            title="Solar Production" 
-            value={`${data?.activePower ?? 0}`} 
-            unit="W" 
+          <StatCard
+            title="Solar Production"
+            value={`${data?.activePower ?? 0}`}
+            unit="W"
             icon={<Sun className="w-5 h-5 text-yellow-400" />}
             trend={data && data.activePower > 0 ? "up" : "neutral"}
           />
-          <StatCard 
-            title="House Load" 
-            value={`${data?.houseLoad.toFixed(0) ?? 0}`} 
-            unit="W" 
+          <StatCard
+            title="House Load"
+            value={`${data?.houseLoad.toFixed(0) ?? 0}`}
+            unit="W"
             icon={<Activity className="w-5 h-5 text-blue-400" />}
             subtitle="Appliances & Lights"
           />
 
 
-          <StatCard 
-            title="Grid Export/Import" 
-            value={`${Math.abs(data?.gridPower ?? 0)}`} 
-            unit="W" 
+          <StatCard
+            title="Grid Export/Import"
+            value={`${Math.abs(data?.gridPower ?? 0)}`}
+            unit="W"
             icon={<TrendingUp className={cn("w-5 h-5", (data?.gridPower ?? 0) >= 0 ? "text-green-400" : "text-red-400")} />}
             subtitle={(data?.gridPower ?? 0) >= 0 ? "Exporting" : "Importing"}
           />
-          <StatCard 
-            title="Battery SOC" 
-            value={`${data?.batterySOC.toFixed(1) ?? '0.0'}`} 
-            unit="%" 
+          <StatCard
+            title="Battery SOC"
+            value={`${data?.batterySOC.toFixed(1) ?? '0.0'}`}
+            unit="%"
             icon={<Battery className={cn("w-5 h-5", (data?.batteryPower ?? 0) >= 0 ? "text-green-400" : "text-blue-400")} />}
             subtitle={(data?.batteryPower ?? 0) > 0 ? "Discharging" : (data?.batteryPower ?? 0) < 0 ? "Charging" : "Idle"}
           />
@@ -387,6 +451,10 @@ export default function App() {
               icon={<Sun className="w-5 h-5 text-yellow-300" />}
               tone="yellow"
               className="left-[50%] top-[15%]"
+              detailRows={[
+                { label: 'PV1', value: liveSolarSplit.pv1Power },
+                { label: 'PV2', value: liveSolarSplit.pv2Power },
+              ]}
             />
 
             <EnergyNode
@@ -443,7 +511,7 @@ export default function App() {
               </div>
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2 bg-black/40 p-1 rounded-lg border border-white/5">
-                  <select 
+                  <select
                     value={selectedDay}
                     onChange={(e) => handleDayChange(e.target.value)}
                     className="bg-transparent text-xs text-gray-300 font-medium px-2 py-1 outline-none border-none cursor-pointer"
@@ -462,8 +530,8 @@ export default function App() {
                         onClick={() => setTimeRange(range.value)}
                         className={cn(
                           "px-3 py-1 text-[10px] font-medium rounded-md transition-all",
-                          timeRange === range.value 
-                            ? "bg-green-500/20 text-green-400 border border-green-500/30" 
+                          timeRange === range.value
+                            ? "bg-green-500/20 text-green-400 border border-green-500/30"
                             : "text-gray-500 hover:text-gray-300 border border-transparent"
                         )}
                       >
@@ -485,11 +553,15 @@ export default function App() {
               <div className="h-[300px] w-full">
 
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={filteredHistory}>
+                <AreaChart data={chartData}>
                   <defs>
-                    <linearGradient id="colorPower" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="colorPv1" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#4ade80" stopOpacity={0.3}/>
                       <stop offset="95%" stopColor="#4ade80" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorPv2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#a3e635" stopOpacity={0.28}/>
+                      <stop offset="95%" stopColor="#a3e635" stopOpacity={0}/>
                     </linearGradient>
                     <linearGradient id="colorCons" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.3}/>
@@ -497,41 +569,56 @@ export default function App() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
-                  <XAxis 
-                    dataKey="time" 
-                    stroke="#ffffff40" 
-                    fontSize={10} 
-                    tickLine={false} 
+                  <XAxis
+                    dataKey="time"
+                    stroke="#ffffff40"
+                    fontSize={10}
+                    tickLine={false}
                     axisLine={false}
                     interval="preserveStartEnd"
                   />
-                  <YAxis 
-                    stroke="#ffffff40" 
-                    fontSize={10} 
-                    tickLine={false} 
+                  <YAxis
+                    stroke="#ffffff40"
+                    fontSize={10}
+                    tickLine={false}
                     axisLine={false}
                     tickFormatter={(val) => `${val}W`}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #ffffff10', borderRadius: '8px' }}
-                    itemStyle={{ color: '#4ade80' }}
+                    itemStyle={{ color: '#d1d5db' }}
+                    formatter={(value, name) => [`${Math.round(Number(value))} W`, name]}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="power" 
-                    stroke="#4ade80" 
+                  <Area
+                    type="monotone"
+                    dataKey="pv1Power"
+                    name="Solar PV1"
+                    stackId="solar"
+                    stroke="#4ade80"
                     strokeWidth={2}
-                    fillOpacity={1} 
-                    fill="url(#colorPower)" 
+                    fillOpacity={1}
+                    fill="url(#colorPv1)"
                     animationDuration={300}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="consumption" 
-                    stroke="#60a5fa" 
+                  <Area
+                    type="monotone"
+                    dataKey="pv2Power"
+                    name="Solar PV2"
+                    stackId="solar"
+                    stroke="#a3e635"
                     strokeWidth={2}
-                    fillOpacity={1} 
-                    fill="url(#colorCons)" 
+                    fillOpacity={1}
+                    fill="url(#colorPv2)"
+                    animationDuration={300}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="consumption"
+                    name="Consumption"
+                    stroke="#60a5fa"
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#colorCons)"
                     animationDuration={300}
                   />
                 </AreaChart>
@@ -647,6 +734,7 @@ function EnergyNode({
   tone,
   className,
   subtitle,
+  detailRows,
 }: {
   label: string;
   value: number;
@@ -654,6 +742,7 @@ function EnergyNode({
   tone: 'yellow' | 'green' | 'blue' | 'red' | 'gray';
   className: string;
   subtitle?: string;
+  detailRows?: Array<{ label: string; value: number }>;
 }) {
   const toneClasses: Record<string, string> = {
     yellow: 'border-yellow-400/45 bg-yellow-300/12 shadow-[0_0_40px_rgba(250,204,21,0.28)]',
@@ -665,7 +754,7 @@ function EnergyNode({
 
   return (
     <div className={cn('absolute -translate-x-1/2 -translate-y-1/2 z-10', className)}>
-      <div className="rounded-xl border border-white/20 bg-black/55 backdrop-blur-md px-3 py-2 min-w-[110px]">
+      <div className="rounded-xl border border-white/20 bg-black/55 backdrop-blur-md px-3 py-2 min-w-[128px]">
         <div className="flex items-center gap-2 mb-1">
           <div className={cn('w-8 h-8 rounded-lg border flex items-center justify-center', toneClasses[tone])}>{icon}</div>
           <div>
@@ -673,6 +762,16 @@ function EnergyNode({
             <p className="text-sm font-mono font-bold text-white">{value.toFixed(0)} W</p>
           </div>
         </div>
+        {detailRows && detailRows.length > 0 && (
+          <div className="mb-1 mt-0.5 space-y-0.5 border-t border-white/10 pt-1.5">
+            {detailRows.map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-3 text-[10px] font-mono">
+                <span className="uppercase tracking-wider text-white/55">{row.label}</span>
+                <span className="text-white/85">{row.value.toFixed(0)} W</span>
+              </div>
+            ))}
+          </div>
+        )}
         {subtitle && <p className="text-[10px] uppercase tracking-wider text-white/55">{subtitle}</p>}
       </div>
     </div>
@@ -695,9 +794,9 @@ function PVRow({ label, voltage, current }: { label: string; voltage?: number; c
         </div>
       </div>
       <div className="w-16 h-1.5 bg-white/5 rounded-full overflow-hidden">
-        <div 
-          className="h-full bg-yellow-500/50 transition-all duration-500" 
-          style={{ width: `${Math.min(100, (power / 3000) * 100)}%` }} 
+        <div
+          className="h-full bg-yellow-500/50 transition-all duration-500"
+          style={{ width: `${Math.min(100, (power / 3000) * 100)}%` }}
         />
       </div>
     </div>
