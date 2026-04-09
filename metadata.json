@@ -1,0 +1,5 @@
+{
+  "name": "Huawei SUN2000 Dashboard",
+  "description": "Real-time monitoring for Huawei SUN2000-6KTL inverters via Modbus TCP.",
+  "requestFramePermissions": []
+}
