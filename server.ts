@@ -165,6 +165,7 @@ async function pollInverter() {
     const logEntry = JSON.stringify({
       time: inverterData.lastUpdate,
       power: inverterData.activePower,
+      inputPower: inverterData.inputPower,
       consumption: inverterData.consumption,
       batterySOC: inverterData.batterySOC,
       gridPower: inverterData.gridPower
