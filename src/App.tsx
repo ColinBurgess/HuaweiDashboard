@@ -64,6 +64,25 @@ interface HistoryPoint {
   consumption: number;
 }
 
+const MAX_DAILY_CHART_POINTS = 1600;
+
+function downsampleHistory(points: HistoryPoint[], maxPoints: number): HistoryPoint[] {
+  if (points.length <= maxPoints || maxPoints < 3) {
+    return points;
+  }
+
+  const step = (points.length - 1) / (maxPoints - 1);
+  const sampled: HistoryPoint[] = [points[0]];
+
+  for (let i = 1; i < maxPoints - 1; i++) {
+    const index = Math.round(i * step);
+    sampled.push(points[index]);
+  }
+
+  sampled.push(points[points.length - 1]);
+  return sampled;
+}
+
 function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number): { pv1Power: number; pv2Power: number } {
   const safeTotal = Math.max(0, totalPower);
   const safePv1 = Math.max(0, pv1Raw);
@@ -93,7 +112,26 @@ const STATUS_MAP: Record<number, { label: string; color: string }> = {
   5: { label: 'Shutdown (Command)', color: 'text-gray-400' },
   6: { label: 'Shutdown (OV)', color: 'text-red-400' },
   7: { label: 'Shutdown (Communication)', color: 'text-gray-400' },
+  512: { label: 'Grid Connected', color: 'text-green-400' },
 };
+
+function resolveSystemStatus(code?: number): { label: string; color: string } {
+  if (code === undefined || code === null) {
+    return { label: 'Connecting...', color: 'text-gray-500' };
+  }
+
+  const directMatch = STATUS_MAP[code];
+  if (directMatch) {
+    return directMatch;
+  }
+
+  // Huawei status can come as a bitmask where 0x0200 indicates running/grid-connected.
+  if ((code & 0x0200) !== 0) {
+    return { label: 'Grid Connected', color: 'text-green-400' };
+  }
+
+  return { label: `Status ${code}`, color: 'text-gray-400' };
+}
 
 
 
@@ -177,7 +215,9 @@ export default function App() {
           consumption: d.consumption,
         };
       });
-      setHistoricalData(points);
+
+      const sampledPoints = downsampleHistory(points, MAX_DAILY_CHART_POINTS);
+      setHistoricalData(sampledPoints);
     } catch (e) {
       console.error('Failed to load history', e);
     } finally {
@@ -187,8 +227,7 @@ export default function App() {
 
 
   const status = useMemo(() => {
-    if (!data) return { label: 'Connecting...', color: 'text-gray-500' };
-    return STATUS_MAP[data.status] || { label: `Unknown (${data.status})`, color: 'text-gray-400' };
+    return resolveSystemStatus(data?.status);
   }, [data]);
 
   const efficiency = useMemo(() => {
@@ -200,6 +239,8 @@ export default function App() {
     if (selectedDay !== 'Live') return historicalData;
     return history.slice(-timeRange);
   }, [history, historicalData, selectedDay, timeRange]);
+
+  const isHistoricalView = selectedDay !== 'Live';
 
   const chartData = useMemo(() => {
     const livePv1Raw = (data?.pv1Voltage ?? 0) * (data?.pv1Current ?? 0);
@@ -598,7 +639,8 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorPv1)"
-                    animationDuration={300}
+                    isAnimationActive={!isHistoricalView}
+                    animationDuration={isHistoricalView ? 0 : 300}
                   />
                   <Area
                     type="monotone"
@@ -609,7 +651,8 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorPv2)"
-                    animationDuration={300}
+                    isAnimationActive={!isHistoricalView}
+                    animationDuration={isHistoricalView ? 0 : 300}
                   />
                   <Area
                     type="monotone"
@@ -619,7 +662,8 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorCons)"
-                    animationDuration={300}
+                    isAnimationActive={!isHistoricalView}
+                    animationDuration={isHistoricalView ? 0 : 300}
                   />
                 </AreaChart>
               </ResponsiveContainer>
