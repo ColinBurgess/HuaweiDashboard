@@ -30,11 +30,15 @@
 }
 
 .flow-dot-green {
-	fill: rgba(134, 239, 172, 1);
-	filter: drop-shadow(0 0 8px rgba(134, 239, 172, 0.95));
+	fill: rgba(187, 247, 208, 0.98);
+	stroke: rgba(74, 222, 128, 0.75);
+	stroke-width: 0.05;
+	filter: drop-shadow(0 0 3px rgba(187, 247, 208, 0.7));
 }
 
 .flow-dot-red {
-	fill: rgba(252, 165, 165, 1);
-	filter: drop-shadow(0 0 8px rgba(248, 113, 113, 0.92));
+	fill: rgba(254, 202, 202, 0.98);
+	stroke: rgba(248, 113, 113, 0.72);
+	stroke-width: 0.05;
+	filter: drop-shadow(0 0 3px rgba(254, 202, 202, 0.68));
 }

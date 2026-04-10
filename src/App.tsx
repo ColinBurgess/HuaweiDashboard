@@ -160,13 +160,13 @@ export default function App() {
         const now = new Date();
         const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const strings = composeStringPowers(
-          newData.activePower,
+          newData.inputPower,
           newData.pv1Voltage * newData.pv1Current,
           newData.pv2Voltage * newData.pv2Current,
         );
         const newHistory = [...prev, {
           time: timeStr,
-          power: newData.activePower,
+          power: newData.inputPower,
           pv1Power: strings.pv1Power,
           pv2Power: strings.pv2Power,
           consumption: newData.consumption
@@ -201,15 +201,16 @@ export default function App() {
       const data = await res.json();
       // Map JSONL fields to HistoryPoint
       const points = data.map((d: any) => {
+        const totalSolarDc = d.inputPower ?? d.power;
         const strings = composeStringPowers(
-          d.power,
+          totalSolarDc,
           d.pv1Power ?? ((d.pv1Voltage ?? 0) * (d.pv1Current ?? 0)),
           d.pv2Power ?? ((d.pv2Voltage ?? 0) * (d.pv2Current ?? 0)),
         );
 
         return {
           time: new Date(d.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          power: d.power,
+          power: totalSolarDc,
           pv1Power: strings.pv1Power,
           pv2Power: strings.pv2Power,
           consumption: d.consumption,
@@ -268,8 +269,9 @@ export default function App() {
   const gridImport = Math.max(-(data?.gridPower ?? 0), 0);
   const batteryChargePower = Math.max(-(data?.batteryPower ?? 0), 0);
   const carChargePower = 0;
+  const solarDcTotal = Math.max(data?.inputPower ?? 0, 0);
   const liveSolarSplit = composeStringPowers(
-    solarPower,
+    solarDcTotal,
     (data?.pv1Voltage ?? 0) * (data?.pv1Current ?? 0),
     (data?.pv2Voltage ?? 0) * (data?.pv2Current ?? 0),
   );
@@ -392,12 +394,12 @@ export default function App() {
                     y2="52"
                     className="flow-line-green"
                   />
-                  <circle r="0.9" className="flow-dot-green">
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L50 52" />
-                  </circle>
-                  <circle r="0.9" className="flow-dot-green">
+                  </rect>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L50 52" />
-                  </circle>
+                  </rect>
                 </>
               )}
 
@@ -410,18 +412,18 @@ export default function App() {
                     y2="15"
                     className="flow-line-green"
                   />
-                  <circle r="0.9" className="flow-dot-green">
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L74 15" />
-                  </circle>
-                  <circle r="0.9" className="flow-dot-green">
+                  </rect>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L74 15" />
-                  </circle>
+                  </rect>
                 </>
               )}
 
               {!isGridToHouseActive && (
                 <path
-                  d="M74 15 L58 15 L58 58 L50 58"
+                  d="M74 15 L58 15 L58 52 L55 52"
                   className="flow-line-guide"
                 />
               )}
@@ -429,15 +431,15 @@ export default function App() {
               {isGridToHouseActive && (
                 <>
                   <path
-                    d="M74 15 L58 15 L58 58 L50 58"
+                    d="M74 15 L58 15 L58 52 L55 52"
                     className="flow-line-red"
                   />
-                  <circle r="0.9" className="flow-dot-red">
-                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M74 15 L58 15 L58 58 L50 58" />
-                  </circle>
-                  <circle r="0.9" className="flow-dot-red">
-                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M74 15 L58 15 L58 58 L50 58" />
-                  </circle>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-red">
+                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M74 15 L58 15 L58 52 L55 52" />
+                  </rect>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-red">
+                    <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M74 15 L58 15 L58 52 L55 52" />
+                  </rect>
                 </>
               )}
 
@@ -454,12 +456,12 @@ export default function App() {
                     d="M50 15 L14 15 L14 55 L22 55"
                     className="flow-line-green"
                   />
-                  <circle r="0.9" className="flow-dot-green">
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 15 L14 15 L14 55 L22 55" />
-                  </circle>
-                  <circle r="0.9" className="flow-dot-green">
+                  </rect>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 15 L14 15 L14 55 L22 55" />
-                  </circle>
+                  </rect>
                 </>
               )}
 
@@ -476,19 +478,19 @@ export default function App() {
                     d="M50 52 L50 61 L75 61"
                     className="flow-line-green"
                   />
-                  <circle r="0.9" className="flow-dot-green">
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" repeatCount="indefinite" path="M50 52 L50 61 L75 61" />
-                  </circle>
-                  <circle r="0.9" className="flow-dot-green">
+                  </rect>
+                  <rect x="-0.35" y="-0.35" width="0.7" height="0.7" rx="0.08" className="flow-dot-green">
                     <animateMotion dur="2.6s" begin="-1.3s" repeatCount="indefinite" path="M50 52 L50 61 L75 61" />
-                  </circle>
+                  </rect>
                 </>
               )}
             </svg>
 
             <EnergyNode
               label="Solar"
-              value={data?.activePower ?? 0}
+              value={solarDcTotal}
               icon={<Sun className="w-5 h-5 text-yellow-300" />}
               tone="yellow"
               className="left-[50%] top-[15%]"
@@ -681,9 +683,9 @@ export default function App() {
                 PV Input Strings
               </h3>
               <div className="space-y-4">
-                <PVRow label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} />
+                <PVRow label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} powerOverride={liveSolarSplit.pv1Power} />
                 <div className="h-px bg-white/5" />
-                <PVRow label="PV2" voltage={data?.pv2Voltage} current={data?.pv2Current} />
+                <PVRow label="PV2" voltage={data?.pv2Voltage} current={data?.pv2Current} powerOverride={liveSolarSplit.pv2Power} />
                 <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center">
                   <span className="text-xs text-gray-500">Total DC Power</span>
                   <span className="text-sm font-mono text-yellow-400">{data?.inputPower ?? 0} W</span>
@@ -822,10 +824,10 @@ function EnergyNode({
   );
 }
 
-function PVRow({ label, voltage, current }: { label: string; voltage?: number; current?: number }) {
+function PVRow({ label, voltage, current, powerOverride }: { label: string; voltage?: number; current?: number; powerOverride?: number }) {
 
 
-  const power = (voltage ?? 0) * (current ?? 0);
+  const power = powerOverride ?? ((voltage ?? 0) * (current ?? 0));
   return (
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
