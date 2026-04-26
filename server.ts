@@ -28,6 +28,8 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
 const SLAVE_ID = 1;
 const HISTORY_DIR = path.join(process.cwd(), 'history');
 const LOGS_DIR = path.join(process.cwd(), 'logs');
+const CHARGER_STATE_FILE = path.join(process.cwd(), 'charger-state.json');
+const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
 
 const OCPP_HOST = process.env.OCPP_HOST ?? '0.0.0.0';
@@ -42,8 +44,12 @@ const GREEN_GRID_VOLTAGE = Number(process.env.GREEN_GRID_VOLTAGE ?? 230);
 const GREEN_MIN_CHARGING_AMPS = 6;
 const GREEN_MAX_CHARGING_AMPS = Number(process.env.GREEN_MAX_CHARGING_AMPS ?? 32);
 const GREEN_HYSTERESIS_AMPS = 1;
+const HYBRID_MIN_CHARGING_AMPS = Math.max(
+  GREEN_MIN_CHARGING_AMPS,
+  Math.min(GREEN_MAX_CHARGING_AMPS, Number(process.env.HYBRID_MIN_CHARGING_AMPS ?? GREEN_MIN_CHARGING_AMPS)),
+);
 
-type ChargingMode = 'FAST' | 'GREEN';
+type ChargingMode = 'FAST' | 'GREEN' | 'HYBRID';
 
 if (MODBUS_PORTS.length === 0) {
   throw new Error('No valid Modbus ports configured. Set MODBUS_PORT or MODBUS_PORTS.');
@@ -228,6 +234,15 @@ type ChargerState = {
   lastUpdate: string;
 };
 
+type PersistedChargerState = {
+  chargingMode: ChargingMode;
+  startRequested: boolean;
+  appliedCurrentLimitA: number | null;
+  lastRequestedCurrentLimitA: number | null;
+  transactionId: number | null;
+  savedAt: string;
+};
+
 type OcppCall = [2, string, string, Record<string, any>];
 type OcppCallResult = [3, string, Record<string, unknown>];
 type OcppCallError = [4, string, string, string, Record<string, unknown>];
@@ -244,6 +259,78 @@ const chargerState: ChargerState = {
   lastRequestedCurrentLimitA: undefined,
   lastUpdate: new Date().toISOString(),
 };
+
+let lastPersistedChargerStateSignature = '';
+
+function buildChargerStateSignature(): string {
+  return JSON.stringify({
+    chargingMode: chargerState.chargingMode,
+    startRequested: chargerState.startRequested,
+    appliedCurrentLimitA: chargerState.appliedCurrentLimitA ?? null,
+    lastRequestedCurrentLimitA: chargerState.lastRequestedCurrentLimitA ?? null,
+    transactionId: chargerState.transactionId ?? null,
+  });
+}
+
+function persistChargerStateIfChanged(force = false): void {
+  try {
+    const signature = buildChargerStateSignature();
+    if (!force && signature === lastPersistedChargerStateSignature) {
+      return;
+    }
+
+    const payload: PersistedChargerState = {
+      chargingMode: chargerState.chargingMode,
+      startRequested: chargerState.startRequested,
+      appliedCurrentLimitA: chargerState.appliedCurrentLimitA ?? null,
+      lastRequestedCurrentLimitA: chargerState.lastRequestedCurrentLimitA ?? null,
+      transactionId: chargerState.transactionId ?? null,
+      savedAt: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(CHARGER_STATE_TMP_FILE, JSON.stringify(payload, null, 2), 'utf8');
+    fs.renameSync(CHARGER_STATE_TMP_FILE, CHARGER_STATE_FILE);
+    lastPersistedChargerStateSignature = signature;
+  } catch (error) {
+    console.error('Failed to persist charger state:', error);
+  }
+}
+
+function restorePersistedChargerState(): void {
+  if (!fs.existsSync(CHARGER_STATE_FILE)) {
+    console.log('[STATE] No persisted charger state file found, starting with defaults');
+    return;
+  }
+
+  try {
+    const raw = fs.readFileSync(CHARGER_STATE_FILE, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<PersistedChargerState>;
+    const mode = String(parsed.chargingMode ?? '').toUpperCase();
+
+    if (mode === 'FAST' || mode === 'GREEN' || mode === 'HYBRID') {
+      chargerState.chargingMode = mode;
+    }
+
+    chargerState.startRequested = Boolean(parsed.startRequested);
+    chargerState.appliedCurrentLimitA = Number.isFinite(parsed.appliedCurrentLimitA as number)
+      ? Number(parsed.appliedCurrentLimitA)
+      : undefined;
+    chargerState.lastRequestedCurrentLimitA = Number.isFinite(parsed.lastRequestedCurrentLimitA as number)
+      ? Number(parsed.lastRequestedCurrentLimitA)
+      : undefined;
+    chargerState.transactionId = Number.isFinite(parsed.transactionId as number)
+      ? Number(parsed.transactionId)
+      : undefined;
+    chargerState.lastUpdate = new Date().toISOString();
+    lastPersistedChargerStateSignature = buildChargerStateSignature();
+
+    console.log(
+      `[STATE] Restored charger state mode=${chargerState.chargingMode} startRequested=${chargerState.startRequested} txId=${chargerState.transactionId ?? 'none'} appliedLimitA=${chargerState.appliedCurrentLimitA ?? 'none'} lastRequestedLimitA=${chargerState.lastRequestedCurrentLimitA ?? 'none'} savedAt=${parsed.savedAt ?? 'unknown'}`,
+    );
+  } catch (error) {
+    console.error('Failed to restore charger state:', error);
+  }
+}
 
 // Active WebSocket connection to the charger (only one at a time)
 let chargerWs: WebSocket | null = null;
@@ -308,6 +395,7 @@ function syncChargerIntoInverterData() {
 
 function emitCombinedData() {
   syncChargerIntoInverterData();
+  persistChargerStateIfChanged();
   io.emit('inverter-data', inverterData);
 }
 
@@ -508,6 +596,76 @@ function applyGreenChargingPolicy(): void {
   }
 }
 
+function applyHybridChargingPolicy(): void {
+  if (chargerState.chargingMode !== 'HYBRID') {
+    return;
+  }
+
+  if (!chargerState.startRequested) {
+    return;
+  }
+
+  if (!canSendToCharger()) {
+    return;
+  }
+
+  const gridExportW = Math.max(0, inverterData.gridPower);
+  const chargerPowerW = Math.max(0, chargerState.powerW);
+  const surplusW = gridExportW + chargerPowerW;
+  const rawTargetAmps = surplusW / GREEN_GRID_VOLTAGE;
+
+  const boundedTargetAmps = Math.max(
+    HYBRID_MIN_CHARGING_AMPS,
+    Math.min(GREEN_MAX_CHARGING_AMPS, Math.floor(rawTargetAmps)),
+  );
+
+  const lastSent = chargerState.lastRequestedCurrentLimitA;
+  const shouldUpdateLimit = lastSent === undefined || Math.abs(boundedTargetAmps - lastSent) > GREEN_HYSTERESIS_AMPS;
+
+  if (shouldUpdateLimit) {
+    sendChargingLimit(boundedTargetAmps);
+  }
+
+  if (chargerState.status !== 'Charging') {
+    sendRemoteStartTransaction();
+  }
+}
+
+function applySmartChargingPolicy(): void {
+  if (chargerState.chargingMode === 'GREEN') {
+    applyGreenChargingPolicy();
+    return;
+  }
+
+  if (chargerState.chargingMode === 'HYBRID') {
+    applyHybridChargingPolicy();
+  }
+}
+
+function reconcileChargerControlState(trigger: string): void {
+  console.log(
+    `[RECON] trigger=${trigger} mode=${chargerState.chargingMode} startRequested=${chargerState.startRequested} connected=${chargerState.connected} status=${chargerState.status} appliedLimitA=${chargerState.appliedCurrentLimitA ?? 'none'} txId=${chargerState.transactionId ?? 'none'}`,
+  );
+
+  if (!chargerState.startRequested) {
+    console.log('[RECON] No start requested, reconciliation completed without action');
+    return;
+  }
+
+  if (chargerState.chargingMode === 'FAST') {
+    console.log('[RECON] FAST mode armed, no smart-limit reconciliation required');
+    return;
+  }
+
+  if (!canSendToCharger()) {
+    console.log('[RECON] Smart mode armed but charger socket is not ready yet');
+    return;
+  }
+
+  console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
+  applySmartChargingPolicy();
+}
+
 function buildCallResult(uniqueId: string, payload: Record<string, unknown>): OcppCallResult {
   return [3, uniqueId, payload];
 }
@@ -573,9 +731,7 @@ function handleOcppCall(
       emitCombinedData();
       console.log(`[${chargePointId}] BootNotification accepted`, payload);
       configureChargerTelemetryIfNeeded(ws, chargePointId);
-      if (chargerState.chargingMode === 'GREEN') {
-        applyGreenChargingPolicy();
-      }
+      reconcileChargerControlState('BootNotification');
       return;
 
     case 'Heartbeat':
@@ -847,6 +1003,9 @@ async function pollInverter() {
 
 
 // Initial connection
+restorePersistedChargerState();
+syncChargerIntoInverterData();
+persistChargerStateIfChanged(true);
 connectModbus();
 
 // Poll every 2 seconds
@@ -883,6 +1042,7 @@ ocppWss.on('connection', (ws, req) => {
   emitCombinedData();
 
   console.log(`OCPP connection opened for ${chargePointId} (${req.socket.remoteAddress ?? 'unknown'})`);
+  reconcileChargerControlState('WebSocketConnected');
 
   ws.on('message', (raw) => {
     try {
@@ -941,8 +1101,8 @@ app.post('/api/charger/start', (req, res) => {
   chargerState.startRequested = true;
   chargerState.lastUpdate = new Date().toISOString();
 
-  if (chargerState.chargingMode === 'GREEN') {
-    applyGreenChargingPolicy();
+  if (chargerState.chargingMode === 'GREEN' || chargerState.chargingMode === 'HYBRID') {
+    reconcileChargerControlState('ApiStart');
     res.json({
       status: chargerState.status === 'Charging' ? 'sent' : 'armed',
       mode: chargerState.chargingMode,
@@ -980,8 +1140,8 @@ app.post('/api/charger/stop', (req, res) => {
 
 app.post('/api/charger/mode', (req, res) => {
   const modeRaw = String(req.body?.mode ?? '').toUpperCase();
-  if (modeRaw !== 'FAST' && modeRaw !== 'GREEN') {
-    res.status(400).json({ error: 'Invalid mode. Use FAST or GREEN.' });
+  if (modeRaw !== 'FAST' && modeRaw !== 'GREEN' && modeRaw !== 'HYBRID') {
+    res.status(400).json({ error: 'Invalid mode. Use FAST, GREEN or HYBRID.' });
     return;
   }
 
@@ -992,7 +1152,7 @@ app.post('/api/charger/mode', (req, res) => {
   if (mode === 'FAST') {
     clearChargingLimit();
   } else {
-    applyGreenChargingPolicy();
+    reconcileChargerControlState('ApiModeChange');
   }
 
   emitCombinedData();
@@ -1005,7 +1165,7 @@ app.post('/api/charger/mode', (req, res) => {
 });
 
 setInterval(() => {
-  applyGreenChargingPolicy();
+  applySmartChargingPolicy();
 }, GREEN_CONTROL_LOOP_MS);
 
 app.get('/api/logs/live', (req, res) => {

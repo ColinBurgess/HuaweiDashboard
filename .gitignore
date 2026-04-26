@@ -5,5 +5,7 @@ dist
 !.env.example
 history/*.jsonl
 logs/*.jsonl
+charger-state.json
+charger-state.json.tmp
 *.log
 .DS_Store

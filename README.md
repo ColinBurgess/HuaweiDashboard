@@ -67,6 +67,22 @@ Variables opcionales:
 - `OCPP_PORT` (default: `9100`)
 - `OCPP_PATH_PREFIX` (default: `/ocpp`)
 - `OCPP_HEARTBEAT_INTERVAL` (default: `30`)
+- `GREEN_GRID_VOLTAGE` (default: `230`)
+- `GREEN_MAX_CHARGING_AMPS` (default: `32`)
+- `HYBRID_MIN_CHARGING_AMPS` (default: `6`)
+
+### Persistencia de estado del cargador
+
+El backend guarda automáticamente el estado de control del cargador en `charger-state.json` para recuperarlo al reiniciar la app (por ejemplo, tras apagar/suspender el portátil).
+
+Se persisten:
+
+- modo de carga (`FAST`, `GREEN`, `HYBRID`)
+- estado `startRequested`
+- límite aplicado y último límite solicitado
+- `transactionId` (si existe)
+
+Al arrancar, el backend restaura estos valores y reanuda la política de control cuando el cargador vuelve a conectar por OCPP.
 
 ### Parámetros recomendados en el cargador
 

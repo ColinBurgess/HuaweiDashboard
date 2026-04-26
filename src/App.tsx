@@ -54,7 +54,7 @@ interface InverterData {
   chargerStatus: string;
   chargePointId: string;
   chargerLastUpdate: string;
-  chargingMode: 'FAST' | 'GREEN';
+  chargingMode: 'FAST' | 'GREEN' | 'HYBRID';
   chargerStartRequested: boolean;
   chargerCurrentLimitA: number | null;
   consumption: number;
@@ -339,6 +339,7 @@ export default function App() {
   const chargerMode = data?.chargingMode ?? 'FAST';
   const chargerStartRequested = data?.chargerStartRequested ?? false;
   const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
+  const isSolarAwareMode = chargerMode === 'GREEN' || chargerMode === 'HYBRID';
   const greenSurplusW = Math.max(0, gridExport + carChargePower);
   const greenSurplusAmps = greenSurplusW / 230;
   const greenMinimumAmps = 6;
@@ -353,6 +354,13 @@ export default function App() {
 
     if (chargerMode === 'FAST') {
       return (data?.chargerStatus ?? '') === 'Charging' ? 'FAST charging' : 'FAST ready';
+    }
+
+    if (chargerMode === 'HYBRID') {
+      if ((data?.chargerStatus ?? '') === 'Charging') {
+        return `HYBRID charging at ${data?.chargerCurrentLimitA ?? greenMinimumAmps}A`;
+      }
+      return chargerStartRequested ? 'HYBRID armed (grid assist)' : 'HYBRID ready';
     }
 
     if ((data?.chargerStatus ?? '') === 'Charging') {
@@ -523,7 +531,7 @@ export default function App() {
             valueAside={(
               <div className={cn(
                 'grid w-full gap-2',
-                isEvColumnTight ? 'max-w-[200px] grid-cols-1' : 'max-w-[280px] grid-cols-2'
+                isEvColumnTight ? 'max-w-[220px] grid-cols-1' : 'max-w-[420px] grid-cols-3'
               )}>
                 <button
                   onClick={() => fetch('/api/charger/mode', {
@@ -556,16 +564,32 @@ export default function App() {
                   GREEN
                 </button>
                 <button
+                  onClick={() => fetch('/api/charger/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'HYBRID' }),
+                  })}
+                  className={cn(
+                    'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    chargerMode === 'HYBRID'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                  )}
+                >
+                  HYBRID
+                </button>
+                <button
                   onClick={() => fetch('/api/charger/start', { method: 'POST' })}
                   disabled={!canStartCharger}
                   className={cn(
                     'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors',
+                    isEvColumnTight ? 'col-span-1' : 'col-span-2',
                     !canStartCharger
                       ? 'bg-white/5 text-gray-500 cursor-not-allowed'
                       : 'bg-green-600 hover:bg-green-500 text-white'
                   )}
                 >
-                  {chargerMode === 'GREEN' ? 'Start Green' : 'Start'}
+                  {chargerMode === 'GREEN' ? 'Start Green' : chargerMode === 'HYBRID' ? 'Start Hybrid' : 'Start'}
                 </button>
                 <button
                   onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
@@ -592,13 +616,15 @@ export default function App() {
                     'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]',
                     chargerMode === 'GREEN'
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : chargerMode === 'HYBRID'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
                       : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
                   )}>
                     Mode {chargerMode}
                   </span>
                   <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">Limit {data?.chargerCurrentLimitA ?? '--'}A</span>
                 </div>
-                {chargerMode === 'GREEN' && (
+                {isSolarAwareMode && (
                   <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-gray-400">
                     <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                       <div className="flex items-center justify-between gap-3">
@@ -619,7 +645,9 @@ export default function App() {
                     <div className="mt-1 flex items-center justify-between gap-3 border-t border-emerald-500/10 pt-1.5">
                       <span>Status</span>
                       <span className={cn('font-mono', greenHasEnoughSurplus ? 'text-green-300' : 'text-yellow-300')}>
-                        {greenHasEnoughSurplus ? 'Surplus ready' : 'More surplus needed'}
+                        {chargerMode === 'HYBRID'
+                          ? (greenHasEnoughSurplus ? 'Hybrid + solar boost' : 'Hybrid using grid assist')
+                          : (greenHasEnoughSurplus ? 'Surplus ready' : 'More surplus needed')}
                       </span>
                     </div>
                   </div>
@@ -1059,7 +1087,7 @@ export default function App() {
 function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, stackValueAside, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; stackValueAside?: boolean; compact?: boolean; className?: string }) {
   return (
     <div className={cn("min-w-0 bg-white/5 border border-white/10 rounded-2xl relative overflow-hidden group hover:bg-white/[0.07] transition-colors", compact ? "p-3 min-h-[118px]" : "p-4.5", className)}>
-      <div className={cn("absolute top-0 right-0 opacity-20 group-hover:opacity-40 transition-opacity", compact ? "p-3" : "p-4")}>
+      <div className={cn("absolute top-0 right-0 pointer-events-none opacity-20 group-hover:opacity-40 transition-opacity", compact ? "p-3" : "p-4")}>
         {icon}
       </div>
       <div className="relative z-10">
