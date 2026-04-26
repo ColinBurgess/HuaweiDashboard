@@ -4,5 +4,6 @@ dist
 .env.*
 !.env.example
 history/*.jsonl
+logs/*.jsonl
 *.log
 .DS_Store

@@ -49,7 +49,11 @@ interface InverterData {
   batteryPower: number;
   batterySOC: number;
   houseLoad: number;
-
+  carChargePower: number;
+  chargerConnected: boolean;
+  chargerStatus: string;
+  chargePointId: string;
+  chargerLastUpdate: string;
   consumption: number;
   lastUpdate: string;
   connected: boolean;
@@ -62,6 +66,21 @@ interface HistoryPoint {
   pv1Power: number;
   pv2Power: number;
   consumption: number;
+}
+
+interface RuntimeLogEntry {
+  time: string;
+  level: 'info' | 'warn' | 'error';
+  source: string;
+  message: string;
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return response.json();
 }
 
 const MAX_DAILY_CHART_POINTS = 1600;
@@ -139,6 +158,7 @@ function resolveSystemStatus(code?: number): { label: string; color: string } {
 export default function App() {
   const [data, setData] = useState<InverterData | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [liveLogs, setLiveLogs] = useState<RuntimeLogEntry[]>([]);
   const [timeRange, setTimeRange] = useState(30); // Default to 30 points (1 min)
   const [isConnected, setIsConnected] = useState(false);
   const [availableDays, setAvailableDays] = useState<string[]>([]);
@@ -176,16 +196,59 @@ export default function App() {
       });
     });
 
+    socket.on('server-log', (entry: RuntimeLogEntry) => {
+      setLiveLogs((prev) => [...prev, entry].slice(-80));
+    });
+
     return () => {
       socket.disconnect();
     };
   }, []);
 
   useEffect(() => {
-    fetch('/api/history/list')
-      .then(res => res.json())
-      .then(data => setAvailableDays(data))
-      .catch(console.error);
+    const controller = new AbortController();
+    let retryTimer: number | undefined;
+
+    const loadLiveLogs = async () => {
+      try {
+        const entries = await fetchJson<RuntimeLogEntry[]>('/api/logs/live', controller.signal);
+        setLiveLogs(entries.slice(-80));
+      } catch {
+        retryTimer = window.setTimeout(loadLiveLogs, 3000);
+      }
+    };
+
+    loadLiveLogs();
+
+    return () => {
+      controller.abort();
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let retryTimer: number | undefined;
+
+    const loadHistoryDays = async () => {
+      try {
+        const days = await fetchJson<string[]>('/api/history/list', controller.signal);
+        setAvailableDays(days);
+      } catch {
+        retryTimer = window.setTimeout(loadHistoryDays, 3000);
+      }
+    };
+
+    loadHistoryDays();
+
+    return () => {
+      controller.abort();
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+    };
   }, []);
 
   const handleDayChange = async (day: string) => {
@@ -197,8 +260,7 @@ export default function App() {
 
     setIsLoadingHistory(true);
     try {
-      const res = await fetch(`/api/history/${day}`);
-      const data = await res.json();
+      const data = await fetchJson<any[]>(`/api/history/${day}`);
       // Map JSONL fields to HistoryPoint
       const points = data.map((d: any) => {
         const totalSolarDc = d.inputPower ?? d.power;
@@ -268,7 +330,7 @@ export default function App() {
   const gridExport = Math.max(data?.gridPower ?? 0, 0);
   const gridImport = Math.max(-(data?.gridPower ?? 0), 0);
   const batteryChargePower = Math.max(-(data?.batteryPower ?? 0), 0);
-  const carChargePower = 0;
+  const carChargePower = Math.max(data?.carChargePower ?? 0, 0);
   const solarDcTotal = Math.max(data?.inputPower ?? 0, 0);
   const liveSolarSplit = composeStringPowers(
     solarDcTotal,
@@ -528,11 +590,11 @@ export default function App() {
 
             <EnergyNode
               label="Car"
-              value={0}
+              value={carChargePower}
               icon={<Car className="w-5 h-5 text-cyan-300" />}
-              tone="gray"
+              tone={carChargePower > 0 ? 'green' : (data?.chargerConnected ? 'blue' : 'gray')}
               className="left-[75%] top-[58%]"
-              subtitle="Meter pending"
+              subtitle={data?.chargerConnected ? (data?.chargerStatus ?? 'Connected') : 'Disconnected'}
             />
 
             <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-white/55">
@@ -720,6 +782,68 @@ export default function App() {
                 <span>ID: {data?.serialNumber.slice(-6) ?? '------'}</span>
               </div>
             </div>
+
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+              <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
+                <Car className="w-4 h-4 text-cyan-400" />
+                EV Charger
+              </h3>
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 uppercase tracking-wider">Connection</span>
+                  <span className={cn('font-medium', data?.chargerConnected ? 'text-green-400' : 'text-gray-400')}>
+                    {data?.chargerConnected ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 uppercase tracking-wider">Status</span>
+                  <span className="font-medium text-gray-200">{data?.chargerStatus ?? 'Unknown'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 uppercase tracking-wider">Power</span>
+                  <span className="font-mono text-cyan-300">{carChargePower.toFixed(0)} W</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 uppercase tracking-wider">Charge Point</span>
+                  <span className="font-mono text-gray-300">{data?.chargePointId ?? 'Unknown'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 uppercase tracking-wider">Updated</span>
+                  <span className="font-mono text-gray-300">
+                    {data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}
+                  </span>
+                </div>
+              </div>
+              {/* Charger control buttons */}
+              {data?.chargerConnected && (
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => fetch('/api/charger/start', { method: 'POST' })}
+                    disabled={data?.chargerStatus === 'Charging'}
+                    className={cn(
+                      'flex-1 py-2 rounded-lg text-xs font-semibold transition-colors',
+                      data?.chargerStatus === 'Charging'
+                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        : 'bg-green-600 hover:bg-green-500 text-white'
+                    )}
+                  >
+                    ▶ Start
+                  </button>
+                  <button
+                    onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
+                    disabled={data?.chargerStatus !== 'Charging'}
+                    className={cn(
+                      'flex-1 py-2 rounded-lg text-xs font-semibold transition-colors',
+                      data?.chargerStatus !== 'Charging'
+                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        : 'bg-red-600 hover:bg-red-500 text-white'
+                    )}
+                  >
+                    ■ Stop
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -740,6 +864,42 @@ export default function App() {
           <div className="flex items-center gap-2 text-[10px] text-gray-500 uppercase tracking-tighter">
             <CheckCircle2 className="w-3 h-3 text-green-500" />
             Modbus TCP Connection Active
+          </div>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-cyan-400" />
+              Live Logs
+            </h3>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">
+              /api/logs/live
+            </span>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/30 h-64 overflow-auto p-3 space-y-2">
+            {liveLogs.length === 0 ? (
+              <div className="text-sm text-gray-500">No logs yet.</div>
+            ) : (
+              liveLogs.slice().reverse().map((entry, index) => (
+                <div key={`${entry.time}-${index}`} className="border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
+                  <div className="flex items-center justify-between gap-4 text-[10px] uppercase tracking-[0.18em] text-gray-500">
+                    <span className={cn(
+                      'font-semibold',
+                      entry.level === 'error' && 'text-red-400',
+                      entry.level === 'warn' && 'text-yellow-400',
+                      entry.level === 'info' && 'text-cyan-400',
+                    )}>
+                      {entry.level}
+                    </span>
+                    <span>{new Date(entry.time).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-200 break-words whitespace-pre-wrap font-mono">
+                    {entry.message}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </main>
