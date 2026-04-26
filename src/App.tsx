@@ -79,6 +79,19 @@ interface RuntimeLogEntry {
   message: string;
 }
 
+type HistoryApiEntry = {
+  time: string;
+  power?: number;
+  inputPower?: number;
+  pv1Power?: number;
+  pv2Power?: number;
+  pv1Voltage?: number;
+  pv1Current?: number;
+  pv2Voltage?: number;
+  pv2Current?: number;
+  consumption?: number;
+};
+
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal });
   if (!response.ok) {
@@ -124,6 +137,23 @@ function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number)
   const pv1Power = safeTotal * (safePv1 / rawSum);
   const pv2Power = Math.max(0, safeTotal - pv1Power);
   return { pv1Power, pv2Power };
+}
+
+function mapHistoryEntryToPoint(entry: HistoryApiEntry): HistoryPoint {
+  const totalSolarDc = entry.inputPower ?? entry.power ?? 0;
+  const strings = composeStringPowers(
+    totalSolarDc,
+    entry.pv1Power ?? ((entry.pv1Voltage ?? 0) * (entry.pv1Current ?? 0)),
+    entry.pv2Power ?? ((entry.pv2Voltage ?? 0) * (entry.pv2Current ?? 0)),
+  );
+
+  return {
+    time: new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    power: totalSolarDc,
+    pv1Power: strings.pv1Power,
+    pv2Power: strings.pv2Power,
+    consumption: Number(entry.consumption ?? 0),
+  };
 }
 
 const STATUS_MAP: Record<number, { label: string; color: string }> = {
@@ -236,6 +266,27 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+
+    const preloadTodayHistory = async () => {
+      const today = new Date().toISOString().split('T')[0];
+      try {
+        const entries = await fetchJson<HistoryApiEntry[]>(`/api/history/${today}`, controller.signal);
+        const points = entries.map(mapHistoryEntryToPoint);
+        setHistory(points.slice(-1800));
+      } catch {
+        // It's normal when the file for today's date does not exist yet.
+      }
+    };
+
+    preloadTodayHistory();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
     let retryTimer: number | undefined;
 
     const loadHistoryDays = async () => {
@@ -266,24 +317,8 @@ export default function App() {
 
     setIsLoadingHistory(true);
     try {
-      const data = await fetchJson<any[]>(`/api/history/${day}`);
-      // Map JSONL fields to HistoryPoint
-      const points = data.map((d: any) => {
-        const totalSolarDc = d.inputPower ?? d.power;
-        const strings = composeStringPowers(
-          totalSolarDc,
-          d.pv1Power ?? ((d.pv1Voltage ?? 0) * (d.pv1Current ?? 0)),
-          d.pv2Power ?? ((d.pv2Voltage ?? 0) * (d.pv2Current ?? 0)),
-        );
-
-        return {
-          time: new Date(d.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          power: totalSolarDc,
-          pv1Power: strings.pv1Power,
-          pv2Power: strings.pv2Power,
-          consumption: d.consumption,
-        };
-      });
+      const data = await fetchJson<HistoryApiEntry[]>(`/api/history/${day}`);
+      const points = data.map(mapHistoryEntryToPoint);
 
       const sampledPoints = downsampleHistory(points, MAX_DAILY_CHART_POINTS);
       setHistoricalData(sampledPoints);

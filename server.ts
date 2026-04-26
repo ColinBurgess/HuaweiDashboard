@@ -1402,6 +1402,13 @@ ocppWss.on('connection', (ws, req) => {
   }
 
   const chargePointId = extractChargePointId(requestPath);
+
+  // If a previous socket is still open for this single-charger server, retire it.
+  if (chargerWs && chargerWs !== ws && chargerWs.readyState === chargerWs.OPEN) {
+    console.warn(`[${chargePointId}] Closing previous OCPP socket to keep a single active connection`);
+    chargerWs.close(1000, 'Replaced by newer connection');
+  }
+
   chargerState.connected = true;
   chargerState.chargePointId = chargePointId;
   chargerState.lastUpdate = new Date().toISOString();
@@ -1418,6 +1425,11 @@ ocppWss.on('connection', (ws, req) => {
   reconcileChargerControlState('WebSocketConnected');
 
   ws.on('message', (raw) => {
+    // Ignore messages from stale sockets that are no longer the active charger connection.
+    if (ws !== chargerWs) {
+      return;
+    }
+
     try {
       const parsed = JSON.parse(raw.toString());
       if (!Array.isArray(parsed) || parsed.length < 3) {
@@ -1463,12 +1475,16 @@ ocppWss.on('connection', (ws, req) => {
 
   ws.on('close', (code, reason) => {
     console.log(`OCPP connection closed for ${chargePointId} (${code}) ${reason.toString()}`);
-    chargerWs = null;
-    chargerState.connected = false;
-    chargerState.cableConnected = false;
-    chargerState.lastUpdate = new Date().toISOString();
-    emitCombinedData();
-    pendingOcppCallsByChargePoint.delete(chargePointId);
+
+    // Only clear shared charger state if this was the active socket.
+    if (chargerWs === ws) {
+      chargerWs = null;
+      chargerState.connected = false;
+      chargerState.cableConnected = false;
+      chargerState.lastUpdate = new Date().toISOString();
+      emitCombinedData();
+      pendingOcppCallsByChargePoint.delete(chargePointId);
+    }
   });
 
   ws.on('error', (error) => {
