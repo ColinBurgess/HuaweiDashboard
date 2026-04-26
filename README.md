@@ -1,27 +1,44 @@
 # Huawei SUN2000 Inverter Dashboard
 
-Dashboard de monitorización en tiempo real para inversores **Huawei SUN2000** con control inteligente de carga de vehículo eléctrico vía **OCPP 1.6**.
+Dashboard residencial para monitorizar un inversor Huawei SUN2000 y controlar un cargador EV vía OCPP 1.6 desde una única aplicación Node.js + React.
 
-## Características principales
+El proyecto combina tres funciones principales:
 
-- **Monitorización en tiempo real** del inversor vía Modbus TCP: producción PV, consumo doméstico, batería, red eléctrica.
-- **Control de cargador EV** mediante servidor OCPP 1.6 local, con tres modos de carga.
-- **Carga verde (GREEN)**: carga exclusivamente con excedente solar, ajustando el límite dinámicamente cada 30 segundos.
-- **Carga híbrida (HYBRID)**: igual que GREEN pero con un mínimo garantizado de amperios incluso sin excedente.
-- **Carga rápida (FAST)**: carga a máxima potencia sin restricciones solares.
-- **Histórico diario** de producción, consumo y balance de red guardado en archivos JSONL.
-- **Log de sesión** persistente en tiempo real, accesible desde el propio dashboard.
-- **Persistencia de estado** del cargador entre reinicios de la aplicación.
+- Telemetría en tiempo real del inversor vía Modbus TCP.
+- Control inteligente del cargador EV con modos FAST, GREEN y HYBRID.
+- Persistencia local de histórico, logs y estado del cargador entre reinicios.
 
----
+## Estado actual
+
+Actualmente el proyecto se ejecuta como un proceso único que levanta:
+
+- API HTTP para el frontend.
+- Servidor OCPP WebSocket para el cargador.
+- Cliente Modbus TCP para el inversor.
+- Emisión de datos en tiempo real al frontend mediante Socket.io.
+
+No está desacoplado aún en servicios separados de inversor, cargador y frontend. El README refleja el estado actual del monolito, no una arquitectura futura.
+
+## Capacidades principales
+
+- Monitorización en tiempo real de producción solar, red, batería, temperatura y consumo doméstico.
+- Visualización del flujo energético y gráfico de potencia vs consumo.
+- Histórico diario persistente en `history/YYYY-MM-DD.jsonl`.
+- Logs de sesión persistentes en `logs/YYYY-MM-DDTHH-MM-SSZ.jsonl`.
+- Persistencia de estado del cargador en `charger-state.json`.
+- Control EV con modos FAST, GREEN y HYBRID.
+- Reconciliación automática tras reinicios o reconexiones OCPP.
+- Protección anti-loop ante `StopTransaction(reason=Other)` repetidos.
+- Soporte de límites OCPP tanto en amperios como en vatios según lo que soporte el cargador.
+- Precarga en la UI del histórico del día actual para que la vista Live no parezca vacía tras reiniciar.
+- Manejo endurecido de reconexiones OCPP para evitar que sockets obsoletos desarmen el control inteligente.
 
 ## Requisitos previos
 
-- **Node.js** v18 o superior.
-- **Inversor Huawei SUN2000** con Modbus TCP habilitado y accesible en red local (habitualmente requiere dongle SDongleA-05).
-- **Cargador EV** compatible con OCPP 1.6 (probado con equipos que soportan `W` como unidad de límite de carga).
-
----
+- Node.js 18 o superior.
+- Inversor Huawei SUN2000 con Modbus TCP habilitado y accesible en red local.
+- Cargador EV compatible con OCPP 1.6.
+- Acceso a red local hacia el inversor y el cargador.
 
 ## Instalación
 
@@ -29,21 +46,21 @@ Dashboard de monitorización en tiempo real para inversores **Huawei SUN2000** c
 npm install
 ```
 
----
-
 ## Configuración
 
-Crea un archivo `.env` en la raíz del proyecto. Variables disponibles:
+Puedes partir de `.env.example` y ampliarlo según necesites.
+
+Variables disponibles actualmente:
 
 ### General
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `APP_PORT` | `3001` | Puerto HTTP del dashboard |
+| `PORT` | `3001` | Puerto HTTP del dashboard si no se usa `APP_PORT` |
+| `APP_PORT` | `3001` | Puerto HTTP principal de la app |
 | `MODBUS_HOST` | `192.168.1.140` | IP del inversor o del dongle |
-| `MODBUS_PORTS` | `502,6607` | Puertos Modbus a probar en orden (rotación automática ante fallos) |
-
-> Algunos inversores usan el puerto `502`, otros el `6607` (cuando el Mac se conecta al AP Wi-Fi del propio inversor).
+| `MODBUS_PORTS` | `502,6607` | Puertos Modbus a probar en orden |
+| `MODBUS_PORT` | `502,6607` | Compatibilidad con configuración antigua de un solo puerto |
 
 ### Servidor OCPP
 
@@ -58,186 +75,212 @@ Crea un archivo `.env` en la raíz del proyecto. Variables disponibles:
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `GREEN_GRID_VOLTAGE` | `230` | Tensión de red en voltios (para conversión A↔W) |
-| `GREEN_MAX_CHARGING_AMPS` | `32` | Límite máximo de carga en amperios |
-| `GREEN_HYSTERESIS_WATTS` | `200` | Diferencia mínima en vatios para actualizar el perfil de carga (evita oscilaciones) |
-| `HYBRID_MIN_CHARGING_AMPS` | `6` | Amperios mínimos garantizados en modo HYBRID cuando ya está cargando |
-| `HYBRID_START_MIN_CHARGING_AMPS` | `8` | Amperios mínimos al arrancar una sesión en modo HYBRID (antes de que el cargador reporte potencia) |
+| `GREEN_GRID_VOLTAGE` | `230` | Tensión usada para convertir entre amperios y vatios |
+| `GREEN_MAX_CHARGING_AMPS` | `32` | Límite máximo de carga |
+| `GREEN_HYSTERESIS_WATTS` | `200` | Cambio mínimo de potencia para reenviar perfil |
+| `HYBRID_MIN_CHARGING_AMPS` | `7` | Mínimo garantizado en HYBRID cuando ya hay sesión estable |
+| `HYBRID_START_MIN_CHARGING_AMPS` | `8` | Mínimo al arrancar una sesión HYBRID |
 
-### Smart Charging Probe (OCPP)
+### Smart Charging Probe
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `OCPP_SMART_PROBE_RATE_UNIT` | `auto` | Unidad preferida para perfiles: `A`, `W` o `auto` (detecta automáticamente según la configuración del cargador) |
-| `OCPP_SMART_PROBE_STACK_LEVEL` | `2` | Stack level para perfiles `ChargePointMaxProfile` |
-| `OCPP_SMART_PROBE_CP_MAX_AMPS` | `8` | Amperios del perfil `ChargePointMaxProfile` en probes |
-| `OCPP_SMART_PROBE_TX_AMPS` | `10` | Amperios del perfil `TxProfile` en probes |
-
----
+| `OCPP_SMART_PROBE_ON_CONNECT` | `1` | Flag histórico de probe automático; hoy se deja desactivado lógicamente para no sobrescribir límites activos |
+| `OCPP_SMART_PROBE_DELAY_MS` | `1500` | Retardo configurado para probes |
+| `OCPP_SMART_PROBE_STACK_LEVEL` | `2` | Stack level del probe `ChargePointMaxProfile` |
+| `OCPP_SMART_PROBE_CP_MAX_AMPS` | `8` | Límite en amperios del probe `ChargePointMaxProfile` |
+| `OCPP_SMART_PROBE_TX_AMPS` | `10` | Límite en amperios del probe `TxProfile` |
+| `OCPP_SMART_PROBE_CP_MAX_WATTS` | `2000` | Límite en vatios del probe `ChargePointMaxProfile` |
+| `OCPP_SMART_PROBE_TX_WATTS` | `2300` | Límite en vatios del probe `TxProfile` |
+| `OCPP_SMART_PROBE_RATE_UNIT` | `auto` | `A`, `W` o `auto` según soporte del cargador |
 
 ## Ejecución
 
-### Modo desarrollo (Vite + servidor en caliente)
+### Desarrollo
 
 ```bash
 npm run dev
 ```
 
-Levanta simultáneamente:
-- Dashboard en `http://localhost:3001`
-- Servidor OCPP en `ws://0.0.0.0:9100/ocpp/<chargePointId>`
+Esto arranca el backend principal desde `server.ts`, incluyendo:
 
-### Modo producción
+- frontend servido por Vite en modo middleware,
+- API HTTP,
+- Socket.io,
+- servidor OCPP,
+- polling Modbus.
+
+Endpoints principales mientras está en marcha:
+
+- Dashboard: `http://localhost:3001`
+- OCPP: `ws://0.0.0.0:9100/ocpp/<chargePointId>`
+
+### Build frontend
 
 ```bash
 npm run build
-npm start
 ```
 
----
+Genera el bundle del frontend en `dist/`.
 
-## Modos de carga del vehículo eléctrico
+### Validación TypeScript
+
+```bash
+npm run lint
+```
+
+### Producción
+
+El script `npm start` existe en `package.json`, pero la ruta documentada históricamente (`dist/server.cjs`) no representa de forma fiable el empaquetado actual del backend. A día de hoy, el modo operativo validado para trabajar con el proyecto es `npm run dev`.
+
+## Modos de carga EV
 
 ### FAST
-Carga a la potencia máxima disponible (`GREEN_MAX_CHARGING_AMPS`). No aplica ninguna restricción solar. El perfil se envía una sola vez al iniciar.
+
+- Carga a máxima potencia permitida (`GREEN_MAX_CHARGING_AMPS`).
+- No aplica restricciones solares.
+- Usa `SetChargingProfile` para fijar el límite alto al iniciar.
 
 ### GREEN
-Control dinámico basado exclusivamente en el excedente solar:
 
-```
-surplusW = gridPower + chargerCurrentPower
+Solo carga con excedente solar suficiente.
+
+Fórmula actual:
+
+```text
+surplusW = gridPower + chargerPower
 targetAmps = surplusW / GREEN_GRID_VOLTAGE
 ```
 
-- `gridPower` es el valor neto de la red (positivo = exportación, negativo = importación).
-- Si el excedente es inferior a `6 A` (1380 W a 230 V), se detiene la carga.
-- El ciclo de control se ejecuta cada 30 segundos.
-- La histéresis de `GREEN_HYSTERESIS_WATTS` evita ajustes continuos por pequeñas fluctuaciones.
+Notas:
+
+- `gridPower > 0` significa exportación a red.
+- Si el objetivo cae por debajo de 6A, el backend detiene la carga.
+- El ciclo de decisión se ejecuta cada 30 segundos.
+- La histéresis evita reenviar perfiles por cambios pequeños.
 
 ### HYBRID
-Igual que GREEN pero nunca baja del mínimo configurado, garantizando que el coche siempre cargue aunque no haya excedente:
 
-- Al iniciar sesión (cargador no activo o potencia = 0): mínimo = `HYBRID_START_MIN_CHARGING_AMPS` (default 8 A).
-- Sesión activa en curso: mínimo = `HYBRID_MIN_CHARGING_AMPS` (default 6 A).
-- El exceso de excedente solar se aprovecha por encima del mínimo hasta `GREEN_MAX_CHARGING_AMPS`.
+Parte de la misma lógica que GREEN, pero con un mínimo garantizado:
 
----
+- Inicio de sesión: mínimo de 8A por defecto.
+- Sesión en marcha: mínimo de 7A por defecto.
+- El excedente solar se aprovecha por encima de ese mínimo hasta el máximo configurado.
 
-## Reconciliación y persistencia del estado del cargador
+Este ajuste se elevó desde 6A a 7A para evitar sesiones inestables observadas en campo.
 
-El backend mantiene en memoria el estado de control del cargador y lo persiste automáticamente en `charger-state.json` ante cualquier cambio relevante (usando escritura atómica vía fichero temporal).
+## Persistencia y reconciliación del cargador
 
-**Campos persistidos:**
-- `chargingMode` (FAST / GREEN / HYBRID)
-- `startRequested` (si el usuario ha pedido iniciar carga)
-- `appliedCurrentLimitA` y `lastRequestedCurrentLimitA`
-- `transactionId` (si existe transacción activa)
+El backend persiste automáticamente en `charger-state.json`:
 
-Al arrancar, el backend restaura estos valores y, cuando el cargador vuelve a conectar por OCPP, ejecuta automáticamente una reconciliación (`reconcileChargerControlState`) para reanudar la política de control sin intervención del usuario.
+- `chargingMode`
+- `startRequested`
+- `appliedCurrentLimitA`
+- `lastRequestedCurrentLimitA`
+- `transactionId`
 
-**Eventos que disparan reconciliación:**
-- `BootNotification` del cargador
-- `WebSocket` de OCPP abierto
-- `StatusNotification` con recuperación de estado `Unavailable`
-- `StopTransaction` sin petición explícita de parada desde la API (auto-rearm)
-- Cambio de modo vía API
+Al reiniciar:
 
-### Protección anti-loop (cooldown)
+- restaura el estado persistido,
+- lo expone de nuevo al frontend,
+- y cuando el cargador reconecta intenta reconciliar el control pendiente.
 
-Si el cargador emite `StopTransaction(reason=Other)` de forma consecutiva (≥ 3 veces), el backend activa un **cooldown de 60 segundos** durante el cual no reintenta el arranque. El contador se resetea en cuanto se recibe un `StopTransaction` con cualquier otro motivo (Local, EVDisconnected, etc.) o al expirar el cooldown.
+Eventos que disparan reconciliación:
 
----
+- apertura del WebSocket OCPP,
+- `BootNotification`,
+- recuperación desde `Unavailable`,
+- `StopTransaction` no iniciado explícitamente por la API,
+- cambio de modo vía API,
+- `start` vía API en modos inteligentes.
 
-## Servidor OCPP 1.6 — Mensajes soportados
+### Protección anti-loop
 
-| Mensaje (charger → server) | Respuesta |
+- Si se reciben 3 `StopTransaction(reason=Other)` consecutivos, se activa un cooldown de 60 segundos.
+- Si el motivo es `Local`, se evita el rearm inmediato y se deja la decisión al ciclo periódico de smart charging.
+- Las reconexiones OCPP ahora ignoran sockets obsoletos para no perder el estado del socket activo.
+
+## OCPP 1.6 soportado
+
+### Mensajes recibidos del cargador
+
+| Mensaje | Comportamiento |
 |---|---|
-| `BootNotification` | `Accepted` |
-| `Heartbeat` | `currentTime` |
-| `Authorize` | `Accepted` |
-| `StatusNotification` | `{}` |
-| `MeterValues` | `{}` (extrae `Power.Active.Import` y actualiza potencia) |
-| `StartTransaction` | `Accepted` + asigna `transactionId` interno |
-| `StopTransaction` | `Accepted` + lógica de rearm / cooldown |
-| `SecurityEventNotification` | `{}` |
-| `DiagnosticsStatusNotification` | `{}` |
-| `FirmwareStatusNotification` | `{}` |
+| `BootNotification` | Acepta y devuelve heartbeat interval |
+| `Heartbeat` | Devuelve `currentTime` |
+| `Authorize` | Acepta `idTag` |
+| `StatusNotification` | Actualiza estado del cargador |
+| `MeterValues` | Actualiza potencia y puede inferir estado de sesión/cable |
+| `StartTransaction` | Acepta y asigna `transactionId` interno |
+| `StopTransaction` | Acepta y decide rearm/cooldown según el motivo |
+| `SecurityEventNotification` | Ack vacío |
+| `DiagnosticsStatusNotification` | Ack vacío |
+| `FirmwareStatusNotification` | Ack vacío |
 
-| Mensaje (server → charger) | Cuándo |
+### Mensajes enviados al cargador
+
+| Mensaje | Uso |
 |---|---|
-| `RemoteStartTransaction` | Al activar carga desde la API o reconciliación |
-| `RemoteStopTransaction` | Al detener carga desde la API o falta de excedente (GREEN) |
-| `SetChargingProfile` | Al ajustar el límite dinámico (TxDefaultProfile) |
-| `ClearChargingProfile` | Al detener en modo FAST o limpiar límite |
-| `GetConfiguration` | Al conectar el cargador (snapshot completo) |
-| `ChangeConfiguration` | Configura `MeterValueSampleInterval=10` y métricas de potencia/energía |
-| `TriggerMessage` | Solicita `MeterValues` al conectar |
+| `RemoteStartTransaction` | Arranque remoto |
+| `RemoteStopTransaction` | Parada remota |
+| `SetChargingProfile` | Límite dinámico o probe |
+| `ClearChargingProfile` | Limpieza de límite |
+| `GetConfiguration` | Snapshot general o claves de smart charging |
+| `ChangeConfiguration` | Configuración de telemetría |
+| `TriggerMessage` | Petición puntual de `MeterValues` |
 
----
+## API y tiempo real
 
-## API REST
+### REST
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| `POST` | `/api/charger/start` | Inicia carga (respeta el modo activo) |
+| `POST` | `/api/charger/start` | Inicia carga respetando el modo activo |
 | `POST` | `/api/charger/stop` | Detiene carga y desarma el modo inteligente |
-| `POST` | `/api/charger/mode` | Cambia el modo: body `{ "mode": "FAST" \| "GREEN" \| "HYBRID" }` |
+| `POST` | `/api/charger/mode` | Cambia a `FAST`, `GREEN` o `HYBRID` |
 | `POST` | `/api/charger/probe-smart` | Lanza un probe manual de smart charging |
-| `GET` | `/api/logs/live` | Últimas 250 entradas del log de sesión (en memoria) |
-| `GET` | `/api/logs/:date` | Log de sesión completo de la fecha indicada (formato `YYYY-MM-DDTHH-MM-SSZ`) |
-| `GET` | `/api/history/list` | Lista de días con histórico disponible |
-| `GET` | `/api/history/:date` | Datos históricos de un día (formato `YYYY-MM-DD`) |
+| `GET` | `/api/logs/live` | Últimas 250 entradas del log activo |
+| `GET` | `/api/logs/:date` | Log completo de una sesión |
+| `GET` | `/api/history/list` | Días con histórico disponible |
+| `GET` | `/api/history/:date` | Histórico diario |
 
-Los datos en tiempo real se emiten por **Socket.io** con el evento `inverter-data`.
+### Socket.io
 
----
+Eventos emitidos actualmente:
 
-## Configuración del cargador EV
+- `inverter-data`: estado agregado inversor + cargador.
+- `server-log`: log en vivo del backend.
 
-Ajustes recomendados en el panel del cargador para conectarlo al servidor OCPP local:
+## Datos Modbus leídos del inversor
 
-| Parámetro | Valor |
-|---|---|
-| Conexión a plataforma | Activada |
-| Proveedor | Custom / Other |
-| Nombre de dominio / IP | IP local del equipo que ejecuta este servidor |
-| Ruta | `/ocpp/CP001` |
-| Puerto | `9100` |
-| Protocolo | `ws://` (sin TLS) |
-| Usuario / Contraseña | Vacíos |
-
----
-
-## Datos leídos del inversor (Modbus TCP)
-
-| Dato | Registro Modbus | Descripción |
+| Dato | Registro | Descripción |
 |---|---|---|
-| Modelo | 30000 (15 regs) | Identificación del inversor |
-| Número de serie | 30015 (10 regs) | S/N del inversor |
-| Tensión PV1 / PV2 | 32016 | Voltaje de cada string fotovoltaico |
-| Corriente PV1 / PV2 | 32016+offset | Corriente de cada string |
-| Potencia de entrada | 32064 (i32) | Potencia total DC en vatios |
-| Potencia activa AC | 32080 (i32) | Potencia exportada/consumida AC |
-| Temperatura | 32087 | Temperatura interna del inversor |
-| Estado | 32087+2 | Código de estado del inversor |
-| Producción diaria | 32106 (u32) | kWh producidos hoy |
-| Producción total | 32114 (u32) | kWh producidos en total |
-| Tensión de red | 32066 | Tensión AC de red |
-| Frecuencia de red | 32066+3 | Frecuencia AC |
-| Potencia de red | 37113 (i32) | Balance neto (+ exporta, − importa) |
-| Potencia de batería | 37001 (i32) | Flujo de batería (+ carga, − descarga) |
-| SOC de batería | 37004 | Estado de carga de la batería (%) |
+| Modelo | `30000` | Identificación del inversor |
+| Número de serie | `30015` | Serial |
+| Tensión/corriente PV1 y PV2 | `32016` | Datos de strings solares |
+| Potencia de entrada DC | `32064` | Potencia fotovoltaica total |
+| Potencia activa AC | `32080` | Potencia AC |
+| Temperatura y estado | `32087` | Estado operativo |
+| Producción diaria | `32106` | Yield diario |
+| Producción total | `32114` | Yield acumulado |
+| Tensión/frecuencia de red | `32066` | Medidas AC |
+| Potencia de red | `37113` | Exportación/importación neta |
+| Potencia de batería | `37001` | Flujo de batería |
+| SOC batería | `37004` | Estado de carga |
 
-**Cálculo de consumo doméstico:**
-```
+Cálculo actual de carga doméstica:
+
+```text
 houseLoad = activePower - gridPower + batteryPower - evChargePower
 ```
 
----
+## Histórico y logs
 
-## Histórico
+### Histórico diario
 
-Cada 2 segundos se escribe una muestra en `history/YYYY-MM-DD.jsonl` con los campos:
+Cada 2 segundos se intenta escribir una muestra en `history/YYYY-MM-DD.jsonl` si la lectura Modbus crítica fue válida.
+
+Ejemplo:
 
 ```json
 {
@@ -250,44 +293,72 @@ Cada 2 segundos se escribe una muestra en `history/YYYY-MM-DD.jsonl` con los cam
 }
 ```
 
-Solo se escriben muestras si todos los bloques Modbus críticos (PV, potencia activa, red) se leyeron correctamente.
+La UI puede cargar días anteriores y, además, la vista Live precarga el histórico del día en curso al arrancar.
 
----
+### Logs de sesión
 
-## Logs de sesión
+Cada arranque crea un fichero nuevo en `logs/`.
 
-Cada arranque del servidor crea un nuevo archivo en `logs/` con el nombre `YYYY-MM-DDTHH-MM-SSZ.jsonl`. Cada línea es un objeto JSON:
+Formato de cada línea:
 
 ```json
 { "time": "...", "level": "info", "source": "server", "message": "..." }
 ```
 
-Los últimos 250 registros de la sesión activa también se emiten en tiempo real por Socket.io (`server-log`) y están disponibles vía `GET /api/logs/live`.
+Los últimos 250 logs se mantienen en memoria y además se emiten en tiempo real al frontend.
 
----
+## Configuración recomendada del cargador
 
-## Estructura del proyecto
+| Parámetro | Valor sugerido |
+|---|---|
+| Conexión a plataforma | Activada |
+| Proveedor | Custom / Other |
+| Host/IP | IP local del equipo que ejecuta la app |
+| Ruta | `/ocpp/CP001` |
+| Puerto | `9100` |
+| Protocolo | `ws://` |
+| Usuario / contraseña | Vacíos si el cargador lo permite |
 
-```
-server.ts          # Backend: Modbus, OCPP, API REST, Socket.io
+## Estructura actual del proyecto
+
+```text
+server.ts            Backend principal: Modbus + OCPP + API + Socket.io
+ocpp_server.ts       Script auxiliar/experimental relacionado con OCPP
+diag_charger.ts      Herramienta auxiliar de diagnóstico
+scan_charger.ts      Herramienta auxiliar de descubrimiento/prueba
+scan_devices.ts      Herramienta auxiliar de red/dispositivos
 src/
-  App.tsx          # Frontend React (dashboard visual)
-  main.tsx         # Punto de entrada React
-  index.css        # Estilos globales
-  lib/utils.ts     # Utilidades de clases CSS (cn)
-history/           # Histórico diario JSONL (auto-generado)
-logs/              # Logs de sesión JSONL (auto-generado)
-charger-state.json # Estado persistido del cargador (auto-generado)
+  App.tsx            Frontend principal React
+  main.tsx           Entrada del frontend
+  index.css          Estilos globales
+  lib/utils.ts       Utilidades frontend
+history/             Histórico diario JSONL
+logs/                Logs de sesión JSONL
+dist/                Bundle frontend generado por Vite
+charger-state.json   Estado persistido del cargador
+.env.example         Configuración base mínima
 ```
 
----
+## Scripts disponibles
+
+| Script | Descripción |
+|---|---|
+| `npm run dev` | Arranca la aplicación principal |
+| `npm run ocpp:dev` | Ejecuta `ocpp_server.ts` |
+| `npm run build` | Compila el frontend con Vite |
+| `npm run lint` | Ejecuta `tsc --noEmit` |
+| `npm run clean` | Borra `dist/` |
+| `npm run preview` | Preview del build frontend |
 
 ## Tecnologías
 
-- **Frontend**: React 19, Tailwind CSS 4, Recharts, Lucide React, Socket.io client
-- **Backend**: Node.js, Express, Socket.io, ws (WebSocket nativo), JSModbus
-- **Build**: Vite, TypeScript, tsx
+- Frontend: React 19, Vite, Recharts, Lucide React, Socket.io client.
+- Backend: Node.js, Express, Socket.io, ws, JSModbus.
+- Tooling: TypeScript, tsx, Tailwind CSS 4.
 
----
+## Observaciones
 
-*Uso residencial — monitorización solar + control de carga EV.*
+- El proyecto ha crecido iterativamente y todavía mezcla responsabilidades de frontend, OCPP y Modbus en un único proceso.
+- La documentación intenta reflejar el comportamiento actual observado en el código, no una arquitectura objetivo futura.
+
+Uso residencial para monitorización solar y control EV.
