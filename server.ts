@@ -539,86 +539,142 @@ socket.on('close', () => {
 async function pollInverter() {
   if (!inverterData.connected) return;
 
-  try {
-    if (inverterData.model === 'Unknown') {
+  const sectionReadStatus = {
+    pv: false,
+    inputPower: false,
+    activePower: false,
+    tempStatus: false,
+    yields: false,
+    grid: false,
+    gridMeter: false,
+    battery: false,
+  };
+
+  if (inverterData.model === 'Unknown') {
+    try {
       const modelRes = await client.readHoldingRegisters(30000, 15);
       inverterData.model = u16ToStr(modelRes.response.body.values);
       const snRes = await client.readHoldingRegisters(30015, 10);
       inverterData.serialNumber = u16ToStr(snRes.response.body.values);
+    } catch (err) {
+      console.warn('Modbus read failed (identity block):', err);
     }
+  }
 
+  try {
     const pvRes = await client.readHoldingRegisters(32016, 10);
     const pvVals = pvRes.response.body.values;
     inverterData.pv1Voltage = pvVals[0] / 10;
     inverterData.pv1Current = pvVals[1] / 100;
     inverterData.pv2Voltage = pvVals[2] / 10;
     inverterData.pv2Current = pvVals[3] / 100;
+    sectionReadStatus.pv = true;
+  } catch (err) {
+    console.warn('Modbus read failed (PV block):', err);
+  }
 
+  try {
     const powerRes = await client.readHoldingRegisters(32064, 2);
     inverterData.inputPower = i32FromRegs(powerRes.response.body.values);
+    sectionReadStatus.inputPower = true;
+  } catch (err) {
+    console.warn('Modbus read failed (input power):', err);
+  }
 
+  try {
     const activePowerRes = await client.readHoldingRegisters(32080, 2);
     inverterData.activePower = i32FromRegs(activePowerRes.response.body.values);
+    sectionReadStatus.activePower = true;
+  } catch (err) {
+    console.warn('Modbus read failed (active power):', err);
+  }
 
+  try {
     const tempStatusRes = await client.readHoldingRegisters(32087, 3);
     inverterData.temperature = tempStatusRes.response.body.values[0] / 10;
     inverterData.status = tempStatusRes.response.body.values[2];
+    sectionReadStatus.tempStatus = true;
+  } catch (err) {
+    console.warn('Modbus read failed (temperature/status):', err);
+  }
 
+  try {
     const yieldRes = await client.readHoldingRegisters(32106, 2);
     inverterData.dailyYield = u32FromRegs(yieldRes.response.body.values) / 100;
 
     const totalYieldRes = await client.readHoldingRegisters(32114, 2);
     inverterData.totalYield = u32FromRegs(totalYieldRes.response.body.values) / 100;
+    sectionReadStatus.yields = true;
+  } catch (err) {
+    console.warn('Modbus read failed (yield counters):', err);
+  }
 
+  try {
     const gridRes = await client.readHoldingRegisters(32066, 4);
     inverterData.gridVoltage = gridRes.response.body.values[0] / 10;
     inverterData.gridFrequency = gridRes.response.body.values[3] / 100;
-
-    try {
-      const meterRes = await client.readHoldingRegisters(37113, 2);
-      inverterData.gridPower = i32FromRegs(meterRes.response.body.values);
-    } catch (e) {
-      inverterData.gridPower = 0;
-    }
-
-    try {
-      const battPowerRes = await client.readHoldingRegisters(37001, 2);
-      inverterData.batteryPower = i32FromRegs(battPowerRes.response.body.values);
-      const battSocRes = await client.readHoldingRegisters(37004, 1);
-      inverterData.batterySOC = battSocRes.response.body.values[0] / 10;
-    } catch (e) {
-      inverterData.batteryPower = 0;
-      inverterData.batterySOC = 0;
-    }
-
-    // Calculation
-    const totalLoad = inverterData.activePower - inverterData.gridPower + inverterData.batteryPower;
-    inverterData.houseLoad = Math.max(0, totalLoad);
-    inverterData.consumption = inverterData.houseLoad;
-
-    inverterData.lastUpdate = new Date().toISOString();
-    emitCombinedData();
-
-    // Save to history
-    const today = new Date().toISOString().split('T')[0];
-    const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
-    const logEntry = JSON.stringify({
-      time: inverterData.lastUpdate,
-      power: inverterData.activePower,
-      inputPower: inverterData.inputPower,
-      consumption: inverterData.consumption,
-      batterySOC: inverterData.batterySOC,
-      gridPower: inverterData.gridPower
-    }) + '\n';
-
-    fs.appendFile(logFile, logEntry, (err) => {
-      if (err) console.error('Error saving to history:', err);
-    });
-
+    sectionReadStatus.grid = true;
   } catch (err) {
-
-    console.error('Polling Error:', err);
+    console.warn('Modbus read failed (grid voltage/frequency):', err);
   }
+
+  try {
+    const meterRes = await client.readHoldingRegisters(37113, 2);
+    inverterData.gridPower = i32FromRegs(meterRes.response.body.values);
+    sectionReadStatus.gridMeter = true;
+  } catch (err) {
+    console.warn('Modbus read failed (grid power meter):', err);
+  }
+
+  try {
+    const battPowerRes = await client.readHoldingRegisters(37001, 2);
+    inverterData.batteryPower = i32FromRegs(battPowerRes.response.body.values);
+    const battSocRes = await client.readHoldingRegisters(37004, 1);
+    inverterData.batterySOC = battSocRes.response.body.values[0] / 10;
+    sectionReadStatus.battery = true;
+  } catch (err) {
+    console.warn('Modbus read failed (battery block):', err);
+  }
+
+  const totalLoad = inverterData.activePower - inverterData.gridPower + inverterData.batteryPower;
+  inverterData.houseLoad = Math.max(0, totalLoad);
+  inverterData.consumption = inverterData.houseLoad;
+
+  inverterData.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+
+  const hasValidHistorySample = (
+    sectionReadStatus.pv
+    && sectionReadStatus.inputPower
+    && sectionReadStatus.activePower
+    && sectionReadStatus.gridMeter
+    && Number.isFinite(inverterData.activePower)
+    && Number.isFinite(inverterData.inputPower)
+    && Number.isFinite(inverterData.consumption)
+    && Number.isFinite(inverterData.gridPower)
+  );
+
+  if (!hasValidHistorySample) {
+    console.warn('Skipping history write due to incomplete/invalid Modbus sample');
+    return;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
+  const logEntry = JSON.stringify({
+    time: inverterData.lastUpdate,
+    power: inverterData.activePower,
+    inputPower: inverterData.inputPower,
+    consumption: inverterData.consumption,
+    batterySOC: inverterData.batterySOC,
+    gridPower: inverterData.gridPower,
+  }) + '\n';
+
+  fs.appendFile(logFile, logEntry, (err) => {
+    if (err) {
+      console.error('Error saving to history:', err);
+    }
+  });
 }
 
 
