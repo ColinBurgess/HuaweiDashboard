@@ -387,20 +387,14 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         {/* Top Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard
             title="Solar Production"
             value={`${solarDcTotal}`}
             unit="W"
             icon={<Sun className="w-5 h-5 text-yellow-400" />}
             trend={solarDcTotal > 0 ? "up" : "neutral"}
-            subtitle="PV1 + PV2 DC"
-            details={(
-              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
-                <CompactPvStat label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} power={liveSolarSplit.pv1Power} />
-                <CompactPvStat label="PV2" voltage={data?.pv2Voltage} current={data?.pv2Current} power={liveSolarSplit.pv2Power} />
-              </div>
-            )}
+            subtitle={`PV1 ${liveSolarSplit.pv1Power.toFixed(0)}W · PV2 ${liveSolarSplit.pv2Power.toFixed(0)}W`}
           />
           <StatCard
             title="House Load"
@@ -424,6 +418,48 @@ export default function App() {
             unit="%"
             icon={<Battery className={cn("w-5 h-5", (data?.batteryPower ?? 0) >= 0 ? "text-green-400" : "text-blue-400")} />}
             subtitle={(data?.batteryPower ?? 0) > 0 ? "Discharging" : (data?.batteryPower ?? 0) < 0 ? "Charging" : "Idle"}
+          />
+          <StatCard
+            title="EV Charger"
+            value={`${carChargePower.toFixed(0)}`}
+            unit="W"
+            icon={<Car className="w-5 h-5 text-cyan-400" />}
+            trend={carChargePower > 0 ? 'up' : 'neutral'}
+            subtitle={data?.chargerConnected ? (data?.chargerStatus ?? 'Connected') : 'Disconnected'}
+            details={(
+              <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
+                  <span>{data?.chargePointId ?? 'Unknown CP'}</span>
+                  <span>{data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => fetch('/api/charger/start', { method: 'POST' })}
+                    disabled={!data?.chargerConnected || data?.chargerStatus === 'Charging'}
+                    className={cn(
+                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
+                      !data?.chargerConnected || data?.chargerStatus === 'Charging'
+                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        : 'bg-green-600 hover:bg-green-500 text-white'
+                    )}
+                  >
+                    Start
+                  </button>
+                  <button
+                    onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
+                    disabled={!data?.chargerConnected || data?.chargerStatus !== 'Charging'}
+                    className={cn(
+                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
+                      !data?.chargerConnected || data?.chargerStatus !== 'Charging'
+                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        : 'bg-red-600 hover:bg-red-500 text-white'
+                    )}
+                  >
+                    Stop
+                  </button>
+                </div>
+              </div>
+            )}
           />
         </div>
 
@@ -773,67 +809,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-              <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
-                <Car className="w-4 h-4 text-cyan-400" />
-                EV Charger
-              </h3>
-              <div className="space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 uppercase tracking-wider">Connection</span>
-                  <span className={cn('font-medium', data?.chargerConnected ? 'text-green-400' : 'text-gray-400')}>
-                    {data?.chargerConnected ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 uppercase tracking-wider">Status</span>
-                  <span className="font-medium text-gray-200">{data?.chargerStatus ?? 'Unknown'}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 uppercase tracking-wider">Power</span>
-                  <span className="font-mono text-cyan-300">{carChargePower.toFixed(0)} W</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 uppercase tracking-wider">Charge Point</span>
-                  <span className="font-mono text-gray-300">{data?.chargePointId ?? 'Unknown'}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500 uppercase tracking-wider">Updated</span>
-                  <span className="font-mono text-gray-300">
-                    {data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}
-                  </span>
-                </div>
-              </div>
-              {/* Charger control buttons */}
-              {data?.chargerConnected && (
-                <div className="mt-4 flex gap-2">
-                  <button
-                    onClick={() => fetch('/api/charger/start', { method: 'POST' })}
-                    disabled={data?.chargerStatus === 'Charging'}
-                    className={cn(
-                      'flex-1 py-2 rounded-lg text-xs font-semibold transition-colors',
-                      data?.chargerStatus === 'Charging'
-                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
-                        : 'bg-green-600 hover:bg-green-500 text-white'
-                    )}
-                  >
-                    ▶ Start
-                  </button>
-                  <button
-                    onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
-                    disabled={data?.chargerStatus !== 'Charging'}
-                    className={cn(
-                      'flex-1 py-2 rounded-lg text-xs font-semibold transition-colors',
-                      data?.chargerStatus !== 'Charging'
-                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
-                        : 'bg-red-600 hover:bg-red-500 text-white'
-                    )}
-                  >
-                    ■ Stop
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -975,20 +950,3 @@ function EnergyNode({
   );
 }
 
-function CompactPvStat({ label, voltage, current, power }: { label: string; voltage?: number; current?: number; power: number }) {
-  return (
-    <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-yellow-400">{label}</span>
-        <span className="text-sm font-mono text-gray-100">{power.toFixed(0)} W</span>
-      </div>
-      <p className="text-[10px] text-gray-500 font-mono">{voltage ?? '--'}V / {current ?? '--'}A</p>
-      <div className="mt-2 h-1.5 bg-white/5 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-yellow-500/50 transition-all duration-500"
-          style={{ width: `${Math.min(100, (power / 3000) * 100)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
