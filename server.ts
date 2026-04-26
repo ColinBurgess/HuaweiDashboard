@@ -28,6 +28,7 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
 const SLAVE_ID = 1;
 const HISTORY_DIR = path.join(process.cwd(), 'history');
 const LOGS_DIR = path.join(process.cwd(), 'logs');
+const SERVER_START_TIME = new Date();
 
 const OCPP_HOST = process.env.OCPP_HOST ?? '0.0.0.0';
 const OCPP_PORT = Number(process.env.OCPP_PORT ?? 9100);
@@ -63,6 +64,12 @@ const originalConsole = {
 const liveLogs: RuntimeLogEntry[] = [];
 const MAX_LIVE_LOGS = 250;
 
+function formatLogSessionTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:]/g, '-').replace(/\.\d{3}Z$/, 'Z');
+}
+
+const RUNTIME_LOG_FILE = path.join(LOGS_DIR, `${formatLogSessionTimestamp(SERVER_START_TIME)}.jsonl`);
+
 function stringifyLogArg(arg: unknown): string {
   if (arg instanceof Error) {
     return arg.stack ?? arg.message;
@@ -83,6 +90,30 @@ function stringifyLogArg(arg: unknown): string {
   }
 }
 
+function storeLiveLog(entry: RuntimeLogEntry) {
+  liveLogs.push(entry);
+  if (liveLogs.length > MAX_LIVE_LOGS) {
+    liveLogs.splice(0, liveLogs.length - MAX_LIVE_LOGS);
+  }
+
+  io.emit('server-log', entry);
+}
+
+function appendRuntimeLog(entry: RuntimeLogEntry, sync = false) {
+  const serializedEntry = `${JSON.stringify(entry)}\n`;
+
+  if (sync) {
+    fs.appendFileSync(RUNTIME_LOG_FILE, serializedEntry);
+    return;
+  }
+
+  fs.appendFile(RUNTIME_LOG_FILE, serializedEntry, (err) => {
+    if (err) {
+      originalConsole.error('Error saving runtime log:', err);
+    }
+  });
+}
+
 function persistRuntimeLog(level: RuntimeLogLevel, source: string, args: unknown[]) {
   if (args.length === 0) {
     return;
@@ -100,20 +131,20 @@ function persistRuntimeLog(level: RuntimeLogLevel, source: string, args: unknown
     message,
   };
 
-  liveLogs.push(entry);
-  if (liveLogs.length > MAX_LIVE_LOGS) {
-    liveLogs.splice(0, liveLogs.length - MAX_LIVE_LOGS);
-  }
+  storeLiveLog(entry);
+  appendRuntimeLog(entry);
+}
 
-  io.emit('server-log', entry);
+function recordLifecycleLog(message: string, level: RuntimeLogLevel = 'info', sync = false) {
+  const entry: RuntimeLogEntry = {
+    time: new Date().toISOString(),
+    level,
+    source: 'lifecycle',
+    message,
+  };
 
-  const today = entry.time.split('T')[0];
-  const logFile = path.join(LOGS_DIR, `${today}.jsonl`);
-  fs.appendFile(logFile, `${JSON.stringify(entry)}\n`, (err) => {
-    if (err) {
-      originalConsole.error('Error saving runtime log:', err);
-    }
-  });
+  storeLiveLog(entry);
+  appendRuntimeLog(entry, sync);
 }
 
 console.log = (...args: unknown[]) => {
@@ -130,6 +161,24 @@ console.error = (...args: unknown[]) => {
   originalConsole.error(...args);
   persistRuntimeLog('error', 'server', args);
 };
+
+let isShuttingDown = false;
+
+function handleShutdown(signal: NodeJS.Signals) {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+  recordLifecycleLog(`Server stopping (${signal})`, 'warn', true);
+  originalConsole.warn(`Server stopping (${signal})`);
+  process.exit(0);
+}
+
+process.once('SIGINT', () => handleShutdown('SIGINT'));
+process.once('SIGTERM', () => handleShutdown('SIGTERM'));
+
+recordLifecycleLog(`Server started. Session log: ${path.basename(RUNTIME_LOG_FILE)}`, 'info', true);
 
 
 // Helper functions for data conversion
