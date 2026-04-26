@@ -337,6 +337,31 @@ export default function App() {
   const chargerMode = data?.chargingMode ?? 'FAST';
   const chargerStartRequested = data?.chargerStartRequested ?? false;
   const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
+  const greenSurplusW = Math.max(0, gridExport + carChargePower);
+  const greenTargetAmps = greenSurplusW / 230;
+  const greenMinimumAmps = 6;
+  const greenHasEnoughSurplus = greenTargetAmps >= greenMinimumAmps;
+  const canStartCharger = Boolean(data?.chargerConnected) && !chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
+  const canStopCharger = Boolean(data?.chargerConnected) && (chargerStartRequested || (data?.chargerStatus ?? '') === 'Charging');
+  const chargerStatusLabel = (() => {
+    if (!data?.chargerConnected) {
+      return 'Disconnected';
+    }
+
+    if (chargerMode === 'FAST') {
+      return (data?.chargerStatus ?? '') === 'Charging' ? 'FAST charging' : 'FAST ready';
+    }
+
+    if ((data?.chargerStatus ?? '') === 'Charging') {
+      return `Charging at ${data?.chargerCurrentLimitA ?? '--'}A`;
+    }
+
+    if (chargerStartRequested) {
+      return greenHasEnoughSurplus ? 'GREEN armed' : 'Waiting for surplus';
+    }
+
+    return 'GREEN ready';
+  })();
   const solarDcTotal = Math.max(data?.inputPower ?? 0, 0);
   const liveSolarSplit = composeStringPowers(
     solarDcTotal,
@@ -393,8 +418,10 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         {/* Top Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 gap-4 items-stretch lg:grid-cols-3 lg:grid-rows-2">
           <StatCard
+            compact
+            className="h-full"
             title="Solar Production"
             value={`${solarDcTotal}`}
             unit="W"
@@ -403,15 +430,123 @@ export default function App() {
             subtitle={`PV1 ${liveSolarSplit.pv1Power.toFixed(0)}W · PV2 ${liveSolarSplit.pv2Power.toFixed(0)}W`}
           />
           <StatCard
+            compact
+            className="h-full"
             title="House Load"
             value={`${data?.houseLoad.toFixed(0) ?? 0}`}
             unit="W"
             icon={<Activity className="w-5 h-5 text-blue-400" />}
             subtitle="Appliances & Lights"
           />
-
-
           <StatCard
+            className="h-full lg:row-span-2"
+            title="EV Charger"
+            value={`${carChargePower.toFixed(0)}`}
+            unit="W"
+            icon={<Car className="w-5 h-5 text-cyan-400" />}
+            trend={carChargePower > 0 ? 'up' : 'neutral'}
+            subtitle={data?.chargerConnected ? chargerStatusLabel : 'Disconnected'}
+            valueAside={(
+              <div className="grid w-full max-w-[280px] grid-cols-2 gap-2">
+                <button
+                  onClick={() => fetch('/api/charger/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'FAST' }),
+                  })}
+                  className={cn(
+                    'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    chargerMode === 'FAST'
+                      ? 'bg-cyan-600 text-white'
+                      : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                  )}
+                >
+                  FAST
+                </button>
+                <button
+                  onClick={() => fetch('/api/charger/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'GREEN' }),
+                  })}
+                  className={cn(
+                    'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    chargerMode === 'GREEN'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                  )}
+                >
+                  GREEN
+                </button>
+                <button
+                  onClick={() => fetch('/api/charger/start', { method: 'POST' })}
+                  disabled={!canStartCharger}
+                  className={cn(
+                    'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors',
+                    !canStartCharger
+                      ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                      : 'bg-green-600 hover:bg-green-500 text-white'
+                  )}
+                >
+                  {chargerMode === 'GREEN' ? 'Start Green' : 'Start'}
+                </button>
+                <button
+                  onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
+                  disabled={!canStopCharger}
+                  className={cn(
+                    'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] transition-colors',
+                    !canStopCharger
+                      ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                      : 'bg-red-600 hover:bg-red-500 text-white'
+                  )}
+                >
+                  {isGreenWaiting ? 'Cancel' : 'Stop'}
+                </button>
+              </div>
+            )}
+            details={(
+              <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
+                  <span>{data?.chargePointId ?? 'Unknown CP'}</span>
+                  <span>{data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className={cn(
+                    'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]',
+                    chargerMode === 'GREEN'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                  )}>
+                    Mode {chargerMode}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">Limit {data?.chargerCurrentLimitA ?? '--'}A</span>
+                </div>
+                {chargerMode === 'GREEN' && (
+                  <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-gray-400">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Surplus</span>
+                        <span className="font-mono text-emerald-300">{greenSurplusW.toFixed(0)}W</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Target</span>
+                        <span className="font-mono text-emerald-300">{greenTargetAmps.toFixed(1)}A</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-3 border-t border-emerald-500/10 pt-1.5">
+                      <span>Minimum</span>
+                      <span className={cn('font-mono', greenHasEnoughSurplus ? 'text-green-300' : 'text-yellow-300')}>
+                        {greenMinimumAmps}A {greenHasEnoughSurplus ? 'ready' : 'required'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          />
+          <StatCard
+            compact
+            className="h-full"
             title="Grid Export/Import"
             value={`${Math.abs(data?.gridPower ?? 0)}`}
             unit="W"
@@ -419,89 +554,13 @@ export default function App() {
             subtitle={(data?.gridPower ?? 0) >= 0 ? "Exporting" : "Importing"}
           />
           <StatCard
+            compact
+            className="h-full"
             title="Battery SOC"
             value={`${data?.batterySOC.toFixed(1) ?? '0.0'}`}
             unit="%"
             icon={<Battery className={cn("w-5 h-5", (data?.batteryPower ?? 0) >= 0 ? "text-green-400" : "text-blue-400")} />}
             subtitle={(data?.batteryPower ?? 0) > 0 ? "Discharging" : (data?.batteryPower ?? 0) < 0 ? "Charging" : "Idle"}
-          />
-          <StatCard
-            title="EV Charger"
-            value={`${carChargePower.toFixed(0)}`}
-            unit="W"
-            icon={<Car className="w-5 h-5 text-cyan-400" />}
-            trend={carChargePower > 0 ? 'up' : 'neutral'}
-            subtitle={data?.chargerConnected ? `${isGreenWaiting ? 'Waiting for solar' : (data?.chargerStatus ?? 'Connected')} · ${chargerMode}` : 'Disconnected'}
-            details={(
-              <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
-                  <span>{data?.chargePointId ?? 'Unknown CP'}</span>
-                  <span>{data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
-                  <span>Mode: {chargerMode}</span>
-                  <span>Limit: {data?.chargerCurrentLimitA ?? '--'}A</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => fetch('/api/charger/mode', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ mode: 'FAST' }),
-                    })}
-                    className={cn(
-                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      chargerMode === 'FAST'
-                        ? 'bg-cyan-600 text-white'
-                        : 'bg-white/5 text-gray-300 hover:bg-white/10'
-                    )}
-                  >
-                    FAST
-                  </button>
-                  <button
-                    onClick={() => fetch('/api/charger/mode', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ mode: 'GREEN' }),
-                    })}
-                    className={cn(
-                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      chargerMode === 'GREEN'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-white/5 text-gray-300 hover:bg-white/10'
-                    )}
-                  >
-                    GREEN
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => fetch('/api/charger/start', { method: 'POST' })}
-                    disabled={!data?.chargerConnected || (data?.chargerStatus === 'Charging' && !isGreenWaiting)}
-                    className={cn(
-                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      !data?.chargerConnected || (data?.chargerStatus === 'Charging' && !isGreenWaiting)
-                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
-                        : 'bg-green-600 hover:bg-green-500 text-white'
-                    )}
-                  >
-                    {chargerMode === 'GREEN' ? (isGreenWaiting ? 'Armed' : 'Start Green') : 'Start'}
-                  </button>
-                  <button
-                    onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
-                    disabled={!data?.chargerConnected || (!chargerStartRequested && data?.chargerStatus !== 'Charging')}
-                    className={cn(
-                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      !data?.chargerConnected || (!chargerStartRequested && data?.chargerStatus !== 'Charging')
-                        ? 'bg-white/5 text-gray-500 cursor-not-allowed'
-                        : 'bg-red-600 hover:bg-red-500 text-white'
-                    )}
-                  >
-                    {isGreenWaiting ? 'Cancel' : 'Stop'}
-                  </button>
-                </div>
-              </div>
-            )}
           />
         </div>
 
@@ -914,23 +973,26 @@ export default function App() {
   );
 }
 
-function StatCard({ title, value, unit, icon, trend, subtitle, details }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode }) {
+function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; compact?: boolean; className?: string }) {
   return (
-    <div className="bg-white/5 border border-white/10 rounded-2xl p-5 relative overflow-hidden group hover:bg-white/[0.07] transition-colors">
-      <div className="absolute top-0 right-0 p-4 opacity-20 group-hover:opacity-40 transition-opacity">
+    <div className={cn("bg-white/5 border border-white/10 rounded-2xl relative overflow-hidden group hover:bg-white/[0.07] transition-colors", compact ? "p-3 min-h-[118px]" : "p-4.5", className)}>
+      <div className={cn("absolute top-0 right-0 opacity-20 group-hover:opacity-40 transition-opacity", compact ? "p-3" : "p-4")}>
         {icon}
       </div>
       <div className="relative z-10">
-        <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-1">{title}</p>
-        <div className="flex items-baseline gap-1">
-          <h2 className="text-3xl font-bold tracking-tight text-gray-100">{value}</h2>
-          <span className="text-sm font-medium text-gray-500">{unit}</span>
+        <p className={cn("uppercase tracking-widest text-gray-500 font-semibold", compact ? "text-[9px] mb-0.5" : "text-[10px] mb-1")}>{title}</p>
+        <div className={cn("flex gap-3", valueAside ? "flex-col items-start sm:flex-row sm:items-start sm:justify-between" : "items-baseline")}>
+          <div className="flex items-baseline gap-1">
+            <h2 className={cn("font-bold tracking-tight text-gray-100", compact ? "text-[1.8rem] leading-none" : "text-[2.75rem]")}>{value}</h2>
+            <span className={cn("font-medium text-gray-500", compact ? "text-xs" : "text-sm")}>{unit}</span>
+          </div>
+          {valueAside}
         </div>
         {(trend || subtitle) && (
-          <div className="mt-2 flex items-center gap-1">
+          <div className={cn("flex items-center gap-1", compact ? "mt-1.5" : "mt-2")}>
             {trend === 'up' && <ArrowUpRight className="w-3 h-3 text-green-400" />}
             {trend === 'down' && <ArrowDownRight className="w-3 h-3 text-red-400" />}
-            <span className={cn("text-[10px] font-medium", trend === 'up' ? "text-green-400" : trend === 'down' ? "text-red-400" : "text-gray-500")}>
+            <span className={cn(compact ? "text-[11px]" : "text-[10px]", "font-medium", trend === 'up' ? "text-green-400" : trend === 'down' ? "text-red-400" : "text-gray-500")}>
               {subtitle || (trend === 'up' ? 'Increasing' : trend === 'down' ? 'Decreasing' : 'Stable')}
             </span>
           </div>
