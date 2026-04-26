@@ -54,7 +54,7 @@ const GREEN_MAX_CHARGING_AMPS = Number(process.env.GREEN_MAX_CHARGING_AMPS ?? 32
 const GREEN_HYSTERESIS_WATTS = Number(process.env.GREEN_HYSTERESIS_WATTS ?? 200);
 const HYBRID_MIN_CHARGING_AMPS = Math.max(
   GREEN_MIN_CHARGING_AMPS,
-  Math.min(GREEN_MAX_CHARGING_AMPS, Number(process.env.HYBRID_MIN_CHARGING_AMPS ?? GREEN_MIN_CHARGING_AMPS)),
+  Math.min(GREEN_MAX_CHARGING_AMPS, Number(process.env.HYBRID_MIN_CHARGING_AMPS ?? 7)),
 );
 const HYBRID_START_MIN_CHARGING_AMPS = Math.max(
   HYBRID_MIN_CHARGING_AMPS,
@@ -1093,6 +1093,17 @@ function handleOcppCall(
       if (payload.transactionId !== undefined && payload.transactionId !== null) {
         chargerState.transactionId = Number(payload.transactionId);
       }
+      // Some chargers do not send initial StatusNotification after reconnect.
+      // Infer cable/session state from periodic meter traffic to avoid false "cable disconnected" UI.
+      if (chargerState.powerW > 0) {
+        chargerState.cableConnected = true;
+        chargerState.status = 'Charging';
+      } else if (chargerState.transactionId !== undefined) {
+        chargerState.cableConnected = true;
+        if (chargerState.status === 'Disconnected' || chargerState.status === 'Available') {
+          chargerState.status = 'Preparing';
+        }
+      }
       chargerState.connected = true;
       chargerState.chargePointId = chargePointId;
       chargerState.lastUpdate = new Date().toISOString();
@@ -1150,6 +1161,14 @@ function handleOcppCall(
           consecutiveStopReasonOtherCount = 0;
           stopReasonOtherCooldownUntil = 0;
         }
+
+        // Charger/EV locally ended the transaction. Avoid immediate re-arm storm;
+        // periodic smart loop can decide later if restart still makes sense.
+        if (stopReason === 'Local') {
+          console.log(`[${chargePointId}] StopTransaction(reason=Local) -> skipping immediate re-arm; waiting for periodic smart loop`);
+          return;
+        }
+
         console.log(`[${chargePointId}] StopTransaction received without API stop request -> keeping smart mode armed (reason=${stopReason}, consecutiveOther=${consecutiveStopReasonOtherCount})`);
         reconcileChargerControlState('StopTransactionWithoutApiStop');
       }
