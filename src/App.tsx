@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { io } from 'socket.io-client';
 import houseBackground from '../HouseBackground2.png';
 import {
@@ -159,6 +159,7 @@ function resolveSystemStatus(code?: number): { label: string; color: string } {
 
 
 export default function App() {
+  const topGridRef = useRef<HTMLDivElement | null>(null);
   const [data, setData] = useState<InverterData | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [liveLogs, setLiveLogs] = useState<RuntimeLogEntry[]>([]);
@@ -168,6 +169,7 @@ export default function App() {
   const [selectedDay, setSelectedDay] = useState<string>('Live');
   const [historicalData, setHistoricalData] = useState<HistoryPoint[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [topColumnWidths, setTopColumnWidths] = useState<[number, number, number]>([25, 25, 50]);
 
 
 
@@ -368,6 +370,52 @@ export default function App() {
     (data?.pv1Voltage ?? 0) * (data?.pv1Current ?? 0),
     (data?.pv2Voltage ?? 0) * (data?.pv2Current ?? 0),
   );
+  const isEvColumnTight = topColumnWidths[2] < 38;
+
+  const startTopGridResize = (dividerIndex: 0 | 1, startClientX: number) => {
+    const gridElement = topGridRef.current;
+    if (!gridElement) {
+      return;
+    }
+
+    const totalWidth = gridElement.getBoundingClientRect().width;
+    if (totalWidth <= 0) {
+      return;
+    }
+
+    const initialWidths = [...topColumnWidths] as [number, number, number];
+    const minWidth = 18;
+    const minEvWidth = 30;
+
+    const onMouseMove = (event: MouseEvent) => {
+      const deltaPercent = ((event.clientX - startClientX) / totalWidth) * 100;
+
+      setTopColumnWidths(() => {
+        const next = [...initialWidths] as [number, number, number];
+
+        if (dividerIndex === 0) {
+          next[0] = Math.max(minWidth, Math.min(next[0] + next[1] - minWidth, initialWidths[0] + deltaPercent));
+          next[1] = initialWidths[0] + initialWidths[1] - next[0];
+        } else {
+          const maxSecond = initialWidths[1] + initialWidths[2] - minEvWidth;
+          next[1] = Math.max(minWidth, Math.min(maxSecond, initialWidths[1] + deltaPercent));
+          next[2] = initialWidths[1] + initialWidths[2] - next[1];
+        }
+
+        return next;
+      });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      document.body.classList.remove('cursor-col-resize', 'select-none');
+    };
+
+    document.body.classList.add('cursor-col-resize', 'select-none');
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
 
   const isSolarToHouseActive = Math.min(solarPower, houseLoad) > 0;
   const isSolarToGridActive = gridExport > 0;
@@ -418,10 +466,34 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         {/* Top Stats Grid */}
-        <div className="grid grid-cols-1 gap-4 items-stretch lg:grid-cols-3 lg:grid-rows-2">
+        <div
+          ref={topGridRef}
+          className="grid grid-cols-1 gap-4 items-stretch lg:gap-y-4 lg:gap-x-0 lg:grid-rows-2 lg:[grid-template-columns:minmax(0,var(--top-col-1))_12px_minmax(0,var(--top-col-2))_12px_minmax(0,var(--top-col-3))]"
+          style={{
+            '--top-col-1': `${topColumnWidths[0]}fr`,
+            '--top-col-2': `${topColumnWidths[1]}fr`,
+            '--top-col-3': `${topColumnWidths[2]}fr`,
+          } as React.CSSProperties}
+        >
+          <button
+            type="button"
+            aria-label="Resize left and center columns"
+            onMouseDown={(event) => startTopGridResize(0, event.clientX)}
+            className="hidden lg:flex lg:col-start-2 lg:row-start-1 lg:row-span-2 z-20 cursor-col-resize items-stretch justify-center rounded-full bg-transparent hover:bg-white/5"
+          >
+            <span className="my-2 w-px bg-white/15" />
+          </button>
+          <button
+            type="button"
+            aria-label="Resize center and right columns"
+            onMouseDown={(event) => startTopGridResize(1, event.clientX)}
+            className="hidden lg:flex lg:col-start-4 lg:row-start-1 lg:row-span-2 z-20 cursor-col-resize items-stretch justify-center rounded-full bg-transparent hover:bg-white/5"
+          >
+            <span className="my-2 w-px bg-white/15" />
+          </button>
           <StatCard
             compact
-            className="h-full"
+            className="h-full lg:col-start-1 lg:row-start-1"
             title="Solar Production"
             value={`${solarDcTotal}`}
             unit="W"
@@ -431,7 +503,7 @@ export default function App() {
           />
           <StatCard
             compact
-            className="h-full"
+            className="h-full lg:col-start-3 lg:row-start-1"
             title="House Load"
             value={`${data?.houseLoad.toFixed(0) ?? 0}`}
             unit="W"
@@ -439,15 +511,19 @@ export default function App() {
             subtitle="Appliances & Lights"
           />
           <StatCard
-            className="h-full lg:row-span-2"
+            className="h-full lg:col-start-5 lg:row-start-1 lg:row-span-2"
             title="EV Charger"
             value={`${carChargePower.toFixed(0)}`}
             unit="W"
             icon={<Car className="w-5 h-5 text-cyan-400" />}
             trend={carChargePower > 0 ? 'up' : 'neutral'}
             subtitle={data?.chargerConnected ? chargerStatusLabel : 'Disconnected'}
+            stackValueAside={isEvColumnTight}
             valueAside={(
-              <div className="grid w-full max-w-[280px] grid-cols-2 gap-2">
+              <div className={cn(
+                'grid w-full gap-2',
+                isEvColumnTight ? 'max-w-[200px] grid-cols-1' : 'max-w-[280px] grid-cols-2'
+              )}>
                 <button
                   onClick={() => fetch('/api/charger/mode', {
                     method: 'POST',
@@ -546,7 +622,7 @@ export default function App() {
           />
           <StatCard
             compact
-            className="h-full"
+            className="h-full lg:col-start-1 lg:row-start-2"
             title="Grid Export/Import"
             value={`${Math.abs(data?.gridPower ?? 0)}`}
             unit="W"
@@ -555,7 +631,7 @@ export default function App() {
           />
           <StatCard
             compact
-            className="h-full"
+            className="h-full lg:col-start-3 lg:row-start-2"
             title="Battery SOC"
             value={`${data?.batterySOC.toFixed(1) ?? '0.0'}`}
             unit="%"
@@ -973,15 +1049,15 @@ export default function App() {
   );
 }
 
-function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; compact?: boolean; className?: string }) {
+function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, stackValueAside, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; stackValueAside?: boolean; compact?: boolean; className?: string }) {
   return (
-    <div className={cn("bg-white/5 border border-white/10 rounded-2xl relative overflow-hidden group hover:bg-white/[0.07] transition-colors", compact ? "p-3 min-h-[118px]" : "p-4.5", className)}>
+    <div className={cn("min-w-0 bg-white/5 border border-white/10 rounded-2xl relative overflow-hidden group hover:bg-white/[0.07] transition-colors", compact ? "p-3 min-h-[118px]" : "p-4.5", className)}>
       <div className={cn("absolute top-0 right-0 opacity-20 group-hover:opacity-40 transition-opacity", compact ? "p-3" : "p-4")}>
         {icon}
       </div>
       <div className="relative z-10">
         <p className={cn("uppercase tracking-widest text-gray-500 font-semibold", compact ? "text-[9px] mb-0.5" : "text-[10px] mb-1")}>{title}</p>
-        <div className={cn("flex gap-3", valueAside ? "flex-col items-start sm:flex-row sm:items-start sm:justify-between" : "items-baseline")}>
+        <div className={cn("flex gap-3", valueAside ? (stackValueAside ? "flex-col items-start" : "flex-col items-start sm:flex-row sm:items-start sm:justify-between") : "items-baseline")}>
           <div className="flex items-baseline gap-1">
             <h2 className={cn("font-bold tracking-tight text-gray-100", compact ? "text-[1.8rem] leading-none" : "text-[2.75rem]")}>{value}</h2>
             <span className={cn("font-medium text-gray-500", compact ? "text-xs" : "text-sm")}>{unit}</span>
