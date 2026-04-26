@@ -394,6 +394,12 @@ export default function App() {
             unit="W"
             icon={<Sun className="w-5 h-5 text-yellow-400" />}
             trend={data && data.activePower > 0 ? "up" : "neutral"}
+            details={(
+              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
+                <CompactPvStat label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} power={liveSolarSplit.pv1Power} />
+                <CompactPvStat label="PV2" voltage={data?.pv2Voltage} current={data?.pv2Current} power={liveSolarSplit.pv2Power} />
+              </div>
+            )}
           />
           <StatCard
             title="House Load"
@@ -738,23 +744,6 @@ export default function App() {
 
           {/* Side Info Panel */}
           <div className="space-y-6">
-            {/* PV Strings */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-              <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
-                <Sun className="w-4 h-4 text-yellow-500" />
-                PV Input Strings
-              </h3>
-              <div className="space-y-4">
-                <PVRow label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} powerOverride={liveSolarSplit.pv1Power} />
-                <div className="h-px bg-white/5" />
-                <PVRow label="PV2" voltage={data?.pv2Voltage} current={data?.pv2Current} powerOverride={liveSolarSplit.pv2Power} />
-                <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center">
-                  <span className="text-xs text-gray-500">Total DC Power</span>
-                  <span className="text-sm font-mono text-yellow-400">{data?.inputPower ?? 0} W</span>
-                </div>
-              </div>
-            </div>
-
             {/* Grid & Health */}
             <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
               <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
@@ -907,7 +896,7 @@ export default function App() {
   );
 }
 
-function StatCard({ title, value, unit, icon, trend, subtitle }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string }) {
+function StatCard({ title, value, unit, icon, trend, subtitle, details }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode }) {
   return (
     <div className="bg-white/5 border border-white/10 rounded-2xl p-5 relative overflow-hidden group hover:bg-white/[0.07] transition-colors">
       <div className="absolute top-0 right-0 p-4 opacity-20 group-hover:opacity-40 transition-opacity">
@@ -928,6 +917,7 @@ function StatCard({ title, value, unit, icon, trend, subtitle }: { title: string
             </span>
           </div>
         )}
+        {details}
       </div>
     </div>
   );
@@ -984,22 +974,15 @@ function EnergyNode({
   );
 }
 
-function PVRow({ label, voltage, current, powerOverride }: { label: string; voltage?: number; current?: number; powerOverride?: number }) {
-
-
-  const power = powerOverride ?? ((voltage ?? 0) * (current ?? 0));
+function CompactPvStat({ label, voltage, current, power }: { label: string; voltage?: number; current?: number; power: number }) {
   return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 bg-yellow-500/10 rounded-lg flex items-center justify-center border border-yellow-500/20">
-          <span className="text-[10px] font-bold text-yellow-500">{label}</span>
-        </div>
-        <div>
-          <p className="text-sm font-medium text-gray-200">{power.toFixed(0)} W</p>
-          <p className="text-[10px] text-gray-500 font-mono">{voltage ?? '--'}V / {current ?? '--'}A</p>
-        </div>
+    <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-yellow-400">{label}</span>
+        <span className="text-sm font-mono text-gray-100">{power.toFixed(0)} W</span>
       </div>
-      <div className="w-16 h-1.5 bg-white/5 rounded-full overflow-hidden">
+      <p className="text-[10px] text-gray-500 font-mono">{voltage ?? '--'}V / {current ?? '--'}A</p>
+      <div className="mt-2 h-1.5 bg-white/5 rounded-full overflow-hidden">
         <div
           className="h-full bg-yellow-500/50 transition-all duration-500"
           style={{ width: `${Math.min(100, (power / 3000) * 100)}%` }}
