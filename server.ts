@@ -51,10 +51,14 @@ const GREEN_CONTROL_LOOP_MS = 30_000;
 const GREEN_GRID_VOLTAGE = Number(process.env.GREEN_GRID_VOLTAGE ?? 230);
 const GREEN_MIN_CHARGING_AMPS = 6;
 const GREEN_MAX_CHARGING_AMPS = Number(process.env.GREEN_MAX_CHARGING_AMPS ?? 32);
-const GREEN_HYSTERESIS_AMPS = 1;
+const GREEN_HYSTERESIS_WATTS = Number(process.env.GREEN_HYSTERESIS_WATTS ?? 200);
 const HYBRID_MIN_CHARGING_AMPS = Math.max(
   GREEN_MIN_CHARGING_AMPS,
   Math.min(GREEN_MAX_CHARGING_AMPS, Number(process.env.HYBRID_MIN_CHARGING_AMPS ?? GREEN_MIN_CHARGING_AMPS)),
+);
+const HYBRID_START_MIN_CHARGING_AMPS = Math.max(
+  HYBRID_MIN_CHARGING_AMPS,
+  Math.min(GREEN_MAX_CHARGING_AMPS, Number(process.env.HYBRID_START_MIN_CHARGING_AMPS ?? 8)),
 );
 
 type ChargingMode = 'FAST' | 'GREEN' | 'HYBRID';
@@ -344,6 +348,13 @@ function restorePersistedChargerState(): void {
 
 // Active WebSocket connection to the charger (only one at a time)
 let chargerWs: WebSocket | null = null;
+let pendingApiStopRequest = false;
+
+// Cooldown mechanism: track consecutive StopTransaction(reason=Other) to avoid aggressive restart loops
+const STOP_OTHER_COOLDOWN_THRESHOLD = 3;       // after this many consecutive reason=Other stops...
+const STOP_OTHER_COOLDOWN_MS       = 60_000;   // ...wait this long before re-arming (ms)
+let consecutiveStopReasonOtherCount = 0;
+let stopReasonOtherCooldownUntil   = 0;        // epoch ms, re-arm blocked until this time
 
 let inverterData = {
   model: 'Unknown',
@@ -828,9 +839,9 @@ function applyGreenChargingPolicy(): void {
     return;
   }
 
-  const gridExportW = Math.max(0, inverterData.gridPower);
+  const gridNetW = inverterData.gridPower;
   const chargerPowerW = Math.max(0, chargerState.powerW);
-  const surplusW = gridExportW + chargerPowerW;
+  const surplusW = gridNetW + chargerPowerW;
 
   const rawTargetAmps = surplusW / GREEN_GRID_VOLTAGE;
   const hasEnoughSurplus = rawTargetAmps >= GREEN_MIN_CHARGING_AMPS;
@@ -854,9 +865,11 @@ function applyGreenChargingPolicy(): void {
   );
 
   const lastSent = chargerState.lastRequestedCurrentLimitA;
-  const diff = lastSent !== undefined ? Math.abs(boundedTargetAmps - lastSent) : null;
-  const shouldUpdateLimit = lastSent === undefined || diff! > GREEN_HYSTERESIS_AMPS;
-  console.log(`[GREEN] cycle: gridExport=${gridExportW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A lastSent=${lastSent ?? 'none'} diff=${diff !== null ? diff.toFixed(2) : 'n/a'} willUpdate=${shouldUpdateLimit}`);
+  const targetWatts = Math.round(boundedTargetAmps * GREEN_GRID_VOLTAGE);
+  const lastSentWatts = lastSent !== undefined ? Math.round(lastSent * GREEN_GRID_VOLTAGE) : null;
+  const diffWatts = lastSentWatts !== null ? Math.abs(targetWatts - lastSentWatts) : null;
+  const shouldUpdateLimit = lastSent === undefined || (diffWatts !== null && diffWatts > GREEN_HYSTERESIS_WATTS);
+  console.log(`[GREEN] cycle: gridNet=${gridNetW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A target=${targetWatts}W lastSent=${lastSent ?? 'none'}A lastSentW=${lastSentWatts ?? 'none'} diffW=${diffWatts ?? 'n/a'} thresholdW=${GREEN_HYSTERESIS_WATTS} willUpdate=${shouldUpdateLimit}`);
 
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
@@ -880,20 +893,27 @@ function applyHybridChargingPolicy(): void {
     return;
   }
 
-  const gridExportW = Math.max(0, inverterData.gridPower);
+  const gridNetW = inverterData.gridPower;
   const chargerPowerW = Math.max(0, chargerState.powerW);
-  const surplusW = gridExportW + chargerPowerW;
+  const surplusW = gridNetW + chargerPowerW;
   const rawTargetAmps = surplusW / GREEN_GRID_VOLTAGE;
 
+  const isStartingSession = chargerState.status !== 'Charging' || chargerPowerW === 0;
+  const minimumHybridAmps = isStartingSession
+    ? HYBRID_START_MIN_CHARGING_AMPS
+    : HYBRID_MIN_CHARGING_AMPS;
+
   const boundedTargetAmps = Math.max(
-    HYBRID_MIN_CHARGING_AMPS,
+    minimumHybridAmps,
     Math.min(GREEN_MAX_CHARGING_AMPS, Math.floor(rawTargetAmps)),
   );
 
   const lastSent = chargerState.lastRequestedCurrentLimitA;
-  const diff = lastSent !== undefined ? Math.abs(boundedTargetAmps - lastSent) : null;
-  const shouldUpdateLimit = lastSent === undefined || diff! > GREEN_HYSTERESIS_AMPS;
-  console.log(`[HYBRID] cycle: gridExport=${gridExportW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A lastSent=${lastSent ?? 'none'} diff=${diff !== null ? diff.toFixed(2) : 'n/a'} willUpdate=${shouldUpdateLimit}`);
+  const targetWatts = Math.round(boundedTargetAmps * GREEN_GRID_VOLTAGE);
+  const lastSentWatts = lastSent !== undefined ? Math.round(lastSent * GREEN_GRID_VOLTAGE) : null;
+  const diffWatts = lastSentWatts !== null ? Math.abs(targetWatts - lastSentWatts) : null;
+  const shouldUpdateLimit = lastSent === undefined || (diffWatts !== null && diffWatts > GREEN_HYSTERESIS_WATTS);
+  console.log(`[HYBRID] cycle: gridNet=${gridNetW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A min=${minimumHybridAmps}A bounded=${boundedTargetAmps}A target=${targetWatts}W lastSent=${lastSent ?? 'none'}A lastSentW=${lastSentWatts ?? 'none'} diffW=${diffWatts ?? 'n/a'} thresholdW=${GREEN_HYSTERESIS_WATTS} willUpdate=${shouldUpdateLimit}`);
 
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
@@ -923,6 +943,18 @@ function reconcileChargerControlState(trigger: string): void {
   if (!chargerState.startRequested) {
     console.log('[RECON] No start requested, reconciliation completed without action');
     return;
+  }
+
+  // Cooldown: charger keeps sending StopTransaction(reason=Other) — back off to avoid hammering
+  if (Date.now() < stopReasonOtherCooldownUntil) {
+    const remainingSecs = Math.ceil((stopReasonOtherCooldownUntil - Date.now()) / 1000);
+    console.log(`[RECON] Cooldown active (${remainingSecs}s remaining after ${consecutiveStopReasonOtherCount} consecutive reason=Other stops) – skipping re-arm`);
+    return;
+  } else if (stopReasonOtherCooldownUntil > 0) {
+    // Cooldown just expired — reset and allow retry
+    console.log(`[RECON] Cooldown expired after ${consecutiveStopReasonOtherCount} consecutive reason=Other stops — resetting counter and retrying`);
+    consecutiveStopReasonOtherCount = 0;
+    stopReasonOtherCooldownUntil = 0;
   }
 
   if (chargerState.chargingMode === 'FAST') {
@@ -1089,18 +1121,40 @@ function handleOcppCall(
       }
       return;
 
-    case 'StopTransaction':
+    case 'StopTransaction': {
       chargerState.status = 'Available';
-      chargerState.startRequested = false;
+      chargerState.startRequested = pendingApiStopRequest ? false : chargerState.startRequested;
       chargerState.transactionId = undefined;
       chargerState.powerW = 0;
       chargerState.appliedCurrentLimitA = undefined;
       chargerState.lastRequestedCurrentLimitA = undefined;
       chargerState.lastUpdate = new Date().toISOString();
+      pendingApiStopRequest = false;
       ws.send(JSON.stringify(buildCallResult(uniqueId, { idTagInfo: { status: 'Accepted' } })));
       emitCombinedData();
       console.log(`[${chargePointId}] StopTransaction`, payload);
+      if (chargerState.startRequested) {
+        const stopReason: string = payload?.reason ?? 'unknown';
+        if (stopReason === 'Other') {
+          consecutiveStopReasonOtherCount++;
+          if (consecutiveStopReasonOtherCount >= STOP_OTHER_COOLDOWN_THRESHOLD) {
+            stopReasonOtherCooldownUntil = Date.now() + STOP_OTHER_COOLDOWN_MS;
+            console.warn(
+              `[${chargePointId}] StopTransaction(reason=Other) #${consecutiveStopReasonOtherCount} – cooldown active for ${STOP_OTHER_COOLDOWN_MS / 1000}s. ` +
+              `Will not re-arm until ${new Date(stopReasonOtherCooldownUntil).toISOString()}`,
+            );
+            return;
+          }
+        } else {
+          // Successful stop (Local, EVDisconnected, etc.) — reset the error counter
+          consecutiveStopReasonOtherCount = 0;
+          stopReasonOtherCooldownUntil = 0;
+        }
+        console.log(`[${chargePointId}] StopTransaction received without API stop request -> keeping smart mode armed (reason=${stopReason}, consecutiveOther=${consecutiveStopReasonOtherCount})`);
+        reconcileChargerControlState('StopTransactionWithoutApiStop');
+      }
       return;
+    }
 
     case 'SecurityEventNotification':
     case 'DiagnosticsStatusNotification':
@@ -1254,7 +1308,8 @@ async function pollInverter() {
   }
 
   const totalLoad = inverterData.activePower - inverterData.gridPower + inverterData.batteryPower;
-  inverterData.houseLoad = Math.max(0, totalLoad);
+  const evLoad = Math.max(0, chargerState.powerW ?? 0);
+  inverterData.houseLoad = Math.max(0, totalLoad - evLoad);
   inverterData.consumption = inverterData.houseLoad;
 
   inverterData.lastUpdate = new Date().toISOString();
@@ -1449,6 +1504,7 @@ app.post('/api/charger/stop', (req, res) => {
     return;
   }
 
+  pendingApiStopRequest = true;
   chargerState.startRequested = false;
   chargerState.appliedCurrentLimitA = undefined;
   chargerState.lastRequestedCurrentLimitA = undefined;
@@ -1460,6 +1516,7 @@ app.post('/api/charger/stop', (req, res) => {
     return;
   }
 
+  pendingApiStopRequest = false;
   chargerState.lastUpdate = new Date().toISOString();
   emitCombinedData();
   res.json({ status: 'cancelled' });
