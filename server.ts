@@ -854,7 +854,9 @@ function applyGreenChargingPolicy(): void {
   );
 
   const lastSent = chargerState.lastRequestedCurrentLimitA;
-  const shouldUpdateLimit = lastSent === undefined || Math.abs(boundedTargetAmps - lastSent) > GREEN_HYSTERESIS_AMPS;
+  const diff = lastSent !== undefined ? Math.abs(boundedTargetAmps - lastSent) : null;
+  const shouldUpdateLimit = lastSent === undefined || diff! > GREEN_HYSTERESIS_AMPS;
+  console.log(`[GREEN] cycle: gridExport=${gridExportW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A lastSent=${lastSent ?? 'none'} diff=${diff !== null ? diff.toFixed(2) : 'n/a'} willUpdate=${shouldUpdateLimit}`);
 
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
@@ -889,7 +891,9 @@ function applyHybridChargingPolicy(): void {
   );
 
   const lastSent = chargerState.lastRequestedCurrentLimitA;
-  const shouldUpdateLimit = lastSent === undefined || Math.abs(boundedTargetAmps - lastSent) > GREEN_HYSTERESIS_AMPS;
+  const diff = lastSent !== undefined ? Math.abs(boundedTargetAmps - lastSent) : null;
+  const shouldUpdateLimit = lastSent === undefined || diff! > GREEN_HYSTERESIS_AMPS;
+  console.log(`[HYBRID] cycle: gridExport=${gridExportW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A lastSent=${lastSent ?? 'none'} diff=${diff !== null ? diff.toFixed(2) : 'n/a'} willUpdate=${shouldUpdateLimit}`);
 
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
