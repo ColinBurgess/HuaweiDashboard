@@ -37,6 +37,14 @@ const OCPP_PORT = Number(process.env.OCPP_PORT ?? 9100);
 const OCPP_PATH_PREFIX = process.env.OCPP_PATH_PREFIX ?? '/ocpp';
 const OCPP_HEARTBEAT_INTERVAL = Number(process.env.OCPP_HEARTBEAT_INTERVAL ?? 30);
 const OCPP_CONFIG_DEBOUNCE_MS = 5 * 60 * 1000;
+const OCPP_SMART_PROBE_ON_CONNECT = String(process.env.OCPP_SMART_PROBE_ON_CONNECT ?? '1').toLowerCase() !== '0';
+const OCPP_SMART_PROBE_DELAY_MS = Number(process.env.OCPP_SMART_PROBE_DELAY_MS ?? 1500);
+const OCPP_SMART_PROBE_STACK_LEVEL = Number(process.env.OCPP_SMART_PROBE_STACK_LEVEL ?? 2);
+const OCPP_SMART_PROBE_CP_MAX_AMPS = Number(process.env.OCPP_SMART_PROBE_CP_MAX_AMPS ?? 8);
+const OCPP_SMART_PROBE_TX_AMPS = Number(process.env.OCPP_SMART_PROBE_TX_AMPS ?? 10);
+const OCPP_SMART_PROBE_CP_MAX_WATTS = Number(process.env.OCPP_SMART_PROBE_CP_MAX_WATTS ?? 2000);
+const OCPP_SMART_PROBE_TX_WATTS = Number(process.env.OCPP_SMART_PROBE_TX_WATTS ?? 2300);
+const OCPP_SMART_PROBE_RATE_UNIT = String(process.env.OCPP_SMART_PROBE_RATE_UNIT ?? 'auto').toLowerCase();
 const MODBUS_RECONNECT_DELAY_MS = 10_000;
 const MODBUS_PORT_ROTATE_THRESHOLD = 3;
 const GREEN_CONTROL_LOOP_MS = 30_000;
@@ -223,6 +231,7 @@ function u32FromRegs(registers: any): number {
 
 type ChargerState = {
   connected: boolean;
+  cableConnected: boolean;
   chargePointId: string;
   status: string;
   powerW: number;
@@ -249,6 +258,7 @@ type OcppCallError = [4, string, string, string, Record<string, unknown>];
 
 const chargerState: ChargerState = {
   connected: false,
+  cableConnected: false,
   chargePointId: 'Unknown',
   status: 'Disconnected',
   powerW: 0,
@@ -356,6 +366,7 @@ let inverterData = {
   houseLoad: 0,
   carChargePower: 0,
   chargerConnected: false,
+  chargerCableConnected: false,
   chargerStatus: 'Disconnected',
   chargePointId: 'Unknown',
   chargerLastUpdate: new Date().toISOString(),
@@ -385,12 +396,33 @@ function connectModbus() {
 function syncChargerIntoInverterData() {
   inverterData.carChargePower = Math.max(0, chargerState.powerW);
   inverterData.chargerConnected = chargerState.connected;
+  inverterData.chargerCableConnected = chargerState.cableConnected;
   inverterData.chargerStatus = chargerState.status;
   inverterData.chargePointId = chargerState.chargePointId;
   inverterData.chargerLastUpdate = chargerState.lastUpdate;
   inverterData.chargingMode = chargerState.chargingMode;
   inverterData.chargerStartRequested = chargerState.startRequested;
   inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
+}
+
+function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined {
+  const status = String(statusRaw ?? '').toLowerCase();
+
+  if (status === 'available') {
+    return false;
+  }
+
+  if (
+    status === 'preparing'
+    || status === 'charging'
+    || status === 'suspendedev'
+    || status === 'suspendedevse'
+    || status === 'finishing'
+  ) {
+    return true;
+  }
+
+  return undefined;
 }
 
 function emitCombinedData() {
@@ -410,6 +442,13 @@ function generateCallId(): string {
   return String(++callIdCounter);
 }
 
+type PendingOcppCall = {
+  action: string;
+  note?: string;
+  sentAt: number;
+};
+
+const pendingOcppCallsByChargePoint = new Map<string, Map<string, PendingOcppCall>>();
 const lastOcppConfigAtByChargePoint = new Map<string, number>();
 
 let transactionIdCounter = 0;
@@ -417,17 +456,230 @@ function generateTransactionId(): number {
   return ++transactionIdCounter;
 }
 
-function buildCall(action: string, payload: Record<string, any>): OcppCall {
-  return [2, generateCallId(), action, payload];
+function rememberPendingOcppCall(chargePointId: string, uniqueId: string, action: string, note?: string): void {
+  const map = pendingOcppCallsByChargePoint.get(chargePointId) ?? new Map<string, PendingOcppCall>();
+  map.set(uniqueId, {
+    action,
+    note,
+    sentAt: Date.now(),
+  });
+  pendingOcppCallsByChargePoint.set(chargePointId, map);
 }
 
-function sendOcppCall(ws: WebSocket, chargePointId: string, action: string, payload: Record<string, any>): void {
-  if (ws.readyState !== ws.OPEN) {
-    return;
+function consumePendingOcppCall(chargePointId: string, uniqueId: string): PendingOcppCall | undefined {
+  const map = pendingOcppCallsByChargePoint.get(chargePointId);
+  if (!map) {
+    return undefined;
   }
 
-  ws.send(JSON.stringify(buildCall(action, payload)));
-  console.log(`[${chargePointId}] → ${action}`);
+  const pending = map.get(uniqueId);
+  if (!pending) {
+    return undefined;
+  }
+
+  map.delete(uniqueId);
+  if (map.size === 0) {
+    pendingOcppCallsByChargePoint.delete(chargePointId);
+  }
+
+  return pending;
+}
+
+function sendOcppCall(
+  ws: WebSocket,
+  chargePointId: string,
+  action: string,
+  payload: Record<string, any>,
+  note?: string,
+): string | undefined {
+  if (ws.readyState !== ws.OPEN) {
+    return undefined;
+  }
+
+  const uniqueId = generateCallId();
+  const frame: OcppCall = [2, uniqueId, action, payload];
+  ws.send(JSON.stringify(frame));
+  rememberPendingOcppCall(chargePointId, uniqueId, action, note);
+  console.log(`[${chargePointId}] → ${action}${note ? ` (${note})` : ''} [id=${uniqueId}]`);
+  return uniqueId;
+}
+
+interface OcppConfigurationKey {
+  key: string;
+  readonly: boolean;
+  value?: string;
+}
+
+interface GetConfigurationResult {
+  configurationKey: OcppConfigurationKey[];
+  unknownKey?: string[];
+}
+
+const chargingScheduleRateUnitByChargePoint = new Map<string, 'A' | 'W'>();
+
+function normalizeChargingRateUnit(rawValue?: string): 'A' | 'W' | undefined {
+  const value = String(rawValue ?? '').trim().toLowerCase();
+  if (!value) {
+    return undefined;
+  }
+
+  if (value === 'a' || value === 'amp' || value === 'amps' || value === 'current') {
+    return 'A';
+  }
+
+  if (value === 'w' || value === 'watt' || value === 'watts' || value === 'power') {
+    return 'W';
+  }
+
+  if (value.includes('power')) {
+    return 'W';
+  }
+
+  if (value.includes('current') || value.includes('amp')) {
+    return 'A';
+  }
+
+  return undefined;
+}
+
+function getPreferredProbeRateUnit(chargePointId: string): 'A' | 'W' {
+  if (OCPP_SMART_PROBE_RATE_UNIT === 'w' || OCPP_SMART_PROBE_RATE_UNIT === 'power') {
+    return 'W';
+  }
+
+  if (OCPP_SMART_PROBE_RATE_UNIT === 'a' || OCPP_SMART_PROBE_RATE_UNIT === 'current') {
+    return 'A';
+  }
+
+  return chargingScheduleRateUnitByChargePoint.get(chargePointId) ?? 'A';
+}
+
+function logGetConfigurationResult(chargePointId: string, result: GetConfigurationResult): void {
+  const keys = result.configurationKey;
+  console.log(`[${chargePointId}] [CONFIG] GetConfiguration → ${keys.length} key(s) reported by charger:`);
+  for (const entry of keys) {
+    const ro = entry.readonly ? ' [readonly]' : '';
+    console.log(`[${chargePointId}] [CONFIG]   ${entry.key}${ro} = ${entry.value ?? '<unset>'}`);
+
+    if (entry.key === 'ChargingScheduleAllowedChargingRateUnit') {
+      const units = String(entry.value ?? '')
+        .split(',')
+        .map((part) => normalizeChargingRateUnit(part))
+        .filter((part): part is 'A' | 'W' => part !== undefined);
+
+      if (units.includes('W')) {
+        chargingScheduleRateUnitByChargePoint.set(chargePointId, 'W');
+      } else if (units.includes('A')) {
+        chargingScheduleRateUnitByChargePoint.set(chargePointId, 'A');
+      }
+
+      const preferred = getPreferredProbeRateUnit(chargePointId);
+      console.log(
+        `[${chargePointId}] [CONFIG]   Effective probe unit=${preferred} (env=${OCPP_SMART_PROBE_RATE_UNIT}, reported=${entry.value ?? '<unset>'})`,
+      );
+    }
+  }
+  if (result.unknownKey && result.unknownKey.length > 0) {
+    console.log(`[${chargePointId}] [CONFIG]   Unknown keys requested: ${result.unknownKey.join(', ')}`);
+  }
+}
+
+const SMART_CHARGING_CONFIG_KEYS = [
+  'SupportedFeatureProfiles',
+  'SmartChargingEnabled',
+  'ChargeProfileMaxStackLevel',
+  'ChargingProfileMaxStackLevel',
+  'ChargingScheduleAllowedChargingRateUnit',
+  'ChargingScheduleMaxPeriods',
+  'MaxChargingProfilesInstalled',
+  'ConnectorSwitch3to1PhaseSupported',
+];
+
+function requestSmartChargingConfiguration(ws: WebSocket, chargePointId: string): void {
+  sendOcppCall(
+    ws,
+    chargePointId,
+    'GetConfiguration',
+    { key: SMART_CHARGING_CONFIG_KEYS },
+    'smart-charging capability keys',
+  );
+}
+
+function sendSetChargingProfileProbe(
+  ws: WebSocket,
+  chargePointId: string,
+  profilePurpose: 'ChargePointMaxProfile' | 'TxDefaultProfile' | 'TxProfile',
+  targetAmps: number,
+  targetWatts: number,
+  stackLevel: number,
+  transactionId?: number,
+): void {
+  const profileId = Math.floor(Date.now() % 1_000_000);
+  const sanitizedStackLevel = Math.max(0, Math.min(999, Math.round(stackLevel)));
+  const preferredRateUnit = getPreferredProbeRateUnit(chargePointId);
+
+  const minWatts = Math.round(GREEN_MIN_CHARGING_AMPS * GREEN_GRID_VOLTAGE);
+  const maxWatts = Math.round(GREEN_MAX_CHARGING_AMPS * GREEN_GRID_VOLTAGE);
+  const sanitizedLimitA = Math.max(GREEN_MIN_CHARGING_AMPS, Math.min(GREEN_MAX_CHARGING_AMPS, Math.round(targetAmps)));
+  const sanitizedLimitW = Math.max(minWatts, Math.min(maxWatts, Math.round(targetWatts)));
+  const limitValue = preferredRateUnit === 'W' ? sanitizedLimitW : sanitizedLimitA;
+
+  const payload: Record<string, any> = {
+    connectorId: profilePurpose === 'ChargePointMaxProfile' ? 0 : 1,
+    csChargingProfiles: {
+      chargingProfileId: profileId,
+      stackLevel: sanitizedStackLevel,
+      chargingProfilePurpose: profilePurpose,
+      chargingProfileKind: 'Absolute',
+      chargingSchedule: {
+        chargingRateUnit: preferredRateUnit,
+        chargingSchedulePeriod: [
+          {
+            startPeriod: 0,
+            limit: limitValue,
+          },
+        ],
+      },
+    },
+  };
+
+  if (profilePurpose === 'TxProfile' && transactionId !== undefined) {
+    payload.csChargingProfiles.transactionId = transactionId;
+  }
+
+  const detail =
+    profilePurpose === 'TxProfile'
+      ? `probe ${profilePurpose} limit=${limitValue}${preferredRateUnit} stack=${sanitizedStackLevel} txId=${transactionId ?? 'none'}`
+      : `probe ${profilePurpose} limit=${limitValue}${preferredRateUnit} stack=${sanitizedStackLevel}`;
+
+  sendOcppCall(ws, chargePointId, 'SetChargingProfile', payload, detail);
+}
+
+function runSmartChargingProbe(ws: WebSocket, chargePointId: string, trigger: string): void {
+  console.log(`[${chargePointId}] [PROBE] Running smart-charging probe (trigger=${trigger})`);
+  requestSmartChargingConfiguration(ws, chargePointId);
+  sendSetChargingProfileProbe(
+    ws,
+    chargePointId,
+    'ChargePointMaxProfile',
+    OCPP_SMART_PROBE_CP_MAX_AMPS,
+    OCPP_SMART_PROBE_CP_MAX_WATTS,
+    OCPP_SMART_PROBE_STACK_LEVEL,
+  );
+
+  if (chargerState.transactionId !== undefined) {
+    sendSetChargingProfileProbe(
+      ws,
+      chargePointId,
+      'TxProfile',
+      OCPP_SMART_PROBE_TX_AMPS,
+      OCPP_SMART_PROBE_TX_WATTS,
+      1,
+      chargerState.transactionId,
+    );
+  } else {
+    console.log(`[${chargePointId}] [PROBE] TxProfile probe skipped (no active transactionId yet)`);
+  }
 }
 
 function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string): void {
@@ -465,8 +717,10 @@ function sendRemoteStartTransaction(): boolean {
     return false;
   }
 
-  const cmd = buildCall('RemoteStartTransaction', { connectorId: 1, idTag: 'Dashboard' });
-  chargerWs.send(JSON.stringify(cmd));
+  sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStartTransaction', {
+    connectorId: 1,
+    idTag: 'Dashboard',
+  });
   chargerState.lastUpdate = new Date().toISOString();
   emitCombinedData();
   console.log('[API] → RemoteStartTransaction');
@@ -479,8 +733,7 @@ function sendRemoteStopTransaction(): boolean {
   }
 
   const txId = chargerState.transactionId ?? 0;
-  const cmd = buildCall('RemoteStopTransaction', { transactionId: txId });
-  chargerWs.send(JSON.stringify(cmd));
+  sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStopTransaction', { transactionId: txId });
   chargerState.lastUpdate = new Date().toISOString();
   emitCombinedData();
   console.log(`[API] → RemoteStopTransaction txId=${txId}`);
@@ -492,12 +745,16 @@ function sendChargingLimit(amps: number): boolean {
     return false;
   }
 
+  const chargePointId = chargerState.chargePointId || 'CP?';
   const sanitizedAmps = Math.max(
     GREEN_MIN_CHARGING_AMPS,
     Math.min(GREEN_MAX_CHARGING_AMPS, Math.round(amps)),
   );
 
-  const cmd = buildCall('SetChargingProfile', {
+  const preferredRateUnit = getPreferredProbeRateUnit(chargePointId);
+  const limitValue = preferredRateUnit === 'W' ? Math.round(sanitizedAmps * GREEN_GRID_VOLTAGE) : sanitizedAmps;
+
+  const payload = {
     connectorId: 1,
     csChargingProfiles: {
       chargingProfileId: 100,
@@ -505,24 +762,30 @@ function sendChargingLimit(amps: number): boolean {
       chargingProfilePurpose: 'TxDefaultProfile',
       chargingProfileKind: 'Absolute',
       chargingSchedule: {
-        chargingRateUnit: 'A',
+        chargingRateUnit: preferredRateUnit,
         chargingSchedulePeriod: [
           {
             startPeriod: 0,
-            limit: sanitizedAmps,
-            numberPhases: 1,
+            limit: limitValue,
+            numberPhases: preferredRateUnit === 'W' ? undefined : 1,
           },
         ],
       },
     },
-  });
+  };
 
-  chargerWs.send(JSON.stringify(cmd));
+  sendOcppCall(
+    chargerWs,
+    chargePointId,
+    'SetChargingProfile',
+    payload,
+    `smart policy TxDefaultProfile limit=${limitValue}${preferredRateUnit}`,
+  );
   chargerState.lastRequestedCurrentLimitA = sanitizedAmps;
   chargerState.appliedCurrentLimitA = sanitizedAmps;
   chargerState.lastUpdate = new Date().toISOString();
   emitCombinedData();
-  console.log(`[SMART] → SetChargingProfile TxDefaultProfile limit=${sanitizedAmps}A`);
+  console.log(`[SMART] → SetChargingProfile TxDefaultProfile limit=${sanitizedAmps}A (sent=${limitValue}${preferredRateUnit})`);
   return true;
 }
 
@@ -531,13 +794,19 @@ function clearChargingLimit(): boolean {
     return false;
   }
 
-  const cmd = buildCall('ClearChargingProfile', {
+  const payload = {
     connectorId: 1,
     chargingProfilePurpose: 'TxDefaultProfile',
     stackLevel: 1,
-  });
+  };
 
-  chargerWs.send(JSON.stringify(cmd));
+  sendOcppCall(
+    chargerWs,
+    chargerState.chargePointId || 'CP?',
+    'ClearChargingProfile',
+    payload,
+    'clear TxDefaultProfile',
+  );
   chargerState.lastRequestedCurrentLimitA = undefined;
   chargerState.appliedCurrentLimitA = undefined;
   chargerState.lastUpdate = new Date().toISOString();
@@ -662,8 +931,13 @@ function reconcileChargerControlState(trigger: string): void {
     return;
   }
 
-  console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
-  applySmartChargingPolicy();
+    if (chargerState.status === 'Unavailable') {
+      console.log('[RECON] Charger is Unavailable (controlled externally, e.g. FusionSolar PV mode) — skipping smart policy');
+      return;
+    }
+
+    console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
+    applySmartChargingPolicy();
 }
 
 function buildCallResult(uniqueId: string, payload: Record<string, unknown>): OcppCallResult {
@@ -720,6 +994,7 @@ function handleOcppCall(
   switch (action) {
     case 'BootNotification':
       chargerState.connected = true;
+      chargerState.cableConnected = false;
       chargerState.chargePointId = chargePointId;
       chargerState.status = 'Available';
       chargerState.lastUpdate = new Date().toISOString();
@@ -744,13 +1019,18 @@ function handleOcppCall(
       ws.send(JSON.stringify(buildCallResult(uniqueId, { idTagInfo: { status: 'Accepted' } })));
       return;
 
-    case 'StatusNotification':
+    case 'StatusNotification': {
+      const previousStatus = chargerState.status;
       chargerState.connected = true;
       chargerState.chargePointId = chargePointId;
       // connectorId 0 is the charger unit itself (always "Available"), ignore it.
       // Only update status from connectorId >= 1 (actual charging connectors).
       if ((payload.connectorId ?? 1) >= 1) {
         chargerState.status = String(payload.status ?? chargerState.status ?? 'Unknown');
+        const inferredCableConnected = inferCableConnectedFromStatus(payload.status);
+        if (inferredCableConnected !== undefined) {
+          chargerState.cableConnected = inferredCableConnected;
+        }
         // Reset power when not actively charging
         if (chargerState.status !== 'Charging') {
           chargerState.powerW = 0;
@@ -761,8 +1041,13 @@ function handleOcppCall(
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
       console.log(`[${chargePointId}] StatusNotification`, payload);
+      // If charger recovers from Unavailable and we have a pending start request, reconcile now
+      if (previousStatus === 'Unavailable' && chargerState.status !== 'Unavailable' && chargerState.startRequested) {
+        console.log(`[${chargePointId}] Charger recovered from Unavailable \u2192 triggering reconciliation`);
+        reconcileChargerControlState('UnavailableRecovered');
+      }
       return;
-
+    }
     case 'MeterValues': {
       const power = parseMeterPower(payload);
       if (Number.isFinite(power)) {
@@ -783,6 +1068,7 @@ function handleOcppCall(
 
     case 'StartTransaction':
       chargerState.connected = true;
+      chargerState.cableConnected = true;
       chargerState.chargePointId = chargePointId;
       chargerState.status = 'Charging';
       chargerState.startRequested = true;
@@ -794,6 +1080,9 @@ function handleOcppCall(
       })));
       emitCombinedData();
       console.log(`[${chargePointId}] StartTransaction accepted, assigned txId=${chargerState.transactionId}`, payload);
+      if (OCPP_SMART_PROBE_ON_CONNECT) {
+        console.log(`[${chargePointId}] [PROBE] Auto probe on StartTransaction is disabled to avoid overriding active charging limits`);
+      }
       return;
 
     case 'StopTransaction':
@@ -1042,6 +1331,12 @@ ocppWss.on('connection', (ws, req) => {
   emitCombinedData();
 
   console.log(`OCPP connection opened for ${chargePointId} (${req.socket.remoteAddress ?? 'unknown'})`);
+  // Always query full charger config on connect so we can see it in the live log.
+  sendOcppCall(ws, chargePointId, 'GetConfiguration', {}, 'full configuration snapshot on connect');
+  requestSmartChargingConfiguration(ws, chargePointId);
+  if (OCPP_SMART_PROBE_ON_CONNECT) {
+    console.log(`[${chargePointId}] [PROBE] Auto probe on connect is disabled to avoid overriding active charging limits`);
+  }
   reconcileChargerControlState('WebSocketConnected');
 
   ws.on('message', (raw) => {
@@ -1058,9 +1353,29 @@ ocppWss.on('connection', (ws, req) => {
         handleOcppCall(ws, chargePointId, parsed as OcppCall);
       } else if (messageType === 3) {
         // CallResult: charger responded to one of our commands
-        console.log(`[${chargePointId}] ← CallResult:`, JSON.stringify(parsed[2], null, 2));
+        const uniqueId = String(parsed[1]);
+        const callResult = parsed[2];
+        const pending = consumePendingOcppCall(chargePointId, uniqueId);
+        if (pending) {
+          const elapsedMs = Date.now() - pending.sentAt;
+          console.log(
+            `[${chargePointId}] ← CallResult for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}] after ${elapsedMs}ms`,
+          );
+        }
+        if (callResult && Array.isArray(callResult.configurationKey)) {
+          logGetConfigurationResult(chargePointId, callResult as GetConfigurationResult);
+        } else {
+          console.log(`[${chargePointId}] ← CallResult:`, JSON.stringify(callResult, null, 2));
+        }
       } else if (messageType === 4) {
         // CallError: charger rejected one of our commands
+        const uniqueId = String(parsed[1]);
+        const pending = consumePendingOcppCall(chargePointId, uniqueId);
+        if (pending) {
+          console.warn(
+            `[${chargePointId}] ← CallError for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}]`,
+          );
+        }
         console.warn(`[${chargePointId}] ← CallError:`, JSON.stringify(parsed, null, 2));
       }
     } catch (error) {
@@ -1072,8 +1387,10 @@ ocppWss.on('connection', (ws, req) => {
     console.log(`OCPP connection closed for ${chargePointId} (${code}) ${reason.toString()}`);
     chargerWs = null;
     chargerState.connected = false;
+    chargerState.cableConnected = false;
     chargerState.lastUpdate = new Date().toISOString();
     emitCombinedData();
+    pendingOcppCallsByChargePoint.delete(chargePointId);
   });
 
   ws.on('error', (error) => {
@@ -1111,7 +1428,13 @@ app.post('/api/charger/start', (req, res) => {
     return;
   }
 
-  clearChargingLimit();
+  if (chargerState.status === 'Unavailable') {
+    console.log('[API] Charger is Unavailable (controlled externally) — FAST start armed but not sent');
+    res.json({ status: 'armed', mode: chargerState.chargingMode, reason: 'charger_unavailable' });
+    return;
+  }
+
+  sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
   sendRemoteStartTransaction();
   res.json({ status: 'sent', mode: chargerState.chargingMode });
 });
@@ -1161,6 +1484,46 @@ app.post('/api/charger/mode', (req, res) => {
     status: 'ok',
     mode: chargerState.chargingMode,
     limitA: chargerState.appliedCurrentLimitA ?? null,
+  });
+});
+
+app.post('/api/charger/probe-smart', (req, res) => {
+  if (!canSendToCharger() || !chargerWs) {
+    res.status(503).json({ error: 'Charger not connected' });
+    return;
+  }
+
+  const stackLevel = Number(req.body?.stackLevel ?? OCPP_SMART_PROBE_STACK_LEVEL);
+  const cpMaxA = Number(req.body?.cpMaxA ?? OCPP_SMART_PROBE_CP_MAX_AMPS);
+  const txA = Number(req.body?.txA ?? OCPP_SMART_PROBE_TX_AMPS);
+  const cpMaxW = Number(req.body?.cpMaxW ?? OCPP_SMART_PROBE_CP_MAX_WATTS);
+  const txW = Number(req.body?.txW ?? OCPP_SMART_PROBE_TX_WATTS);
+  const chargePointId = chargerState.chargePointId || 'CP?';
+
+  requestSmartChargingConfiguration(chargerWs, chargePointId);
+  sendSetChargingProfileProbe(chargerWs, chargePointId, 'ChargePointMaxProfile', cpMaxA, cpMaxW, stackLevel);
+  if (chargerState.transactionId !== undefined) {
+    sendSetChargingProfileProbe(
+      chargerWs,
+      chargePointId,
+      'TxProfile',
+      txA,
+      txW,
+      stackLevel,
+      chargerState.transactionId,
+    );
+  }
+
+  res.json({
+    status: 'sent',
+    chargePointId,
+    stackLevel,
+    preferredRateUnit: getPreferredProbeRateUnit(chargePointId),
+    cpMaxA,
+    txA,
+    cpMaxW,
+    txW,
+    txId: chargerState.transactionId ?? null,
   });
 });
 

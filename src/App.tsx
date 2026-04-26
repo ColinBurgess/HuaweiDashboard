@@ -51,6 +51,7 @@ interface InverterData {
   houseLoad: number;
   carChargePower: number;
   chargerConnected: boolean;
+  chargerCableConnected: boolean;
   chargerStatus: string;
   chargePointId: string;
   chargerLastUpdate: string;
@@ -338,6 +339,8 @@ export default function App() {
   const carChargePower = Math.max(data?.carChargePower ?? 0, 0);
   const chargerMode = data?.chargingMode ?? 'FAST';
   const chargerStartRequested = data?.chargerStartRequested ?? false;
+  const chargerCableConnected = Boolean(data?.chargerCableConnected);
+  const showCableDisconnectedOverlay = Boolean(data?.chargerConnected) && !chargerCableConnected;
   const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
   const isSolarAwareMode = chargerMode === 'GREEN' || chargerMode === 'HYBRID';
   const greenSurplusW = Math.max(0, gridExport + carChargePower);
@@ -345,22 +348,33 @@ export default function App() {
   const greenMinimumAmps = 6;
   const greenMinimumW = greenMinimumAmps * 230;
   const greenHasEnoughSurplus = greenSurplusAmps >= greenMinimumAmps;
-  const canStartCharger = Boolean(data?.chargerConnected) && !chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
-  const canStopCharger = Boolean(data?.chargerConnected) && (chargerStartRequested || (data?.chargerStatus ?? '') === 'Charging');
+  const canConfigureCharger = Boolean(data?.chargerConnected) && chargerCableConnected;
+  const canStartCharger = canConfigureCharger && !chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
+  const canStopCharger = canConfigureCharger && (chargerStartRequested || (data?.chargerStatus ?? '') === 'Charging');
   const chargerStatusLabel = (() => {
     if (!data?.chargerConnected) {
       return 'Disconnected';
     }
 
     if (chargerMode === 'FAST') {
+      if (!chargerCableConnected) {
+        return 'Cable disconnected';
+      }
       return (data?.chargerStatus ?? '') === 'Charging' ? 'FAST charging' : 'FAST ready';
     }
 
     if (chargerMode === 'HYBRID') {
+      if (!chargerCableConnected) {
+        return 'Cable disconnected';
+      }
       if ((data?.chargerStatus ?? '') === 'Charging') {
         return `HYBRID charging at ${data?.chargerCurrentLimitA ?? greenMinimumAmps}A`;
       }
       return chargerStartRequested ? 'HYBRID armed (grid assist)' : 'HYBRID ready';
+    }
+
+    if (!chargerCableConnected) {
+      return 'Cable disconnected';
     }
 
     if ((data?.chargerStatus ?? '') === 'Charging') {
@@ -527,6 +541,14 @@ export default function App() {
             icon={<Car className="w-5 h-5 text-cyan-400" />}
             trend={carChargePower > 0 ? 'up' : 'neutral'}
             subtitle={data?.chargerConnected ? chargerStatusLabel : 'Disconnected'}
+            blurred={showCableDisconnectedOverlay}
+            overlay={showCableDisconnectedOverlay ? (
+              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-xl border border-red-500/45 bg-red-500/10 backdrop-blur-[1px]">
+                <span className="rounded-lg border border-red-500/50 bg-red-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-red-200">
+                  Cable disconnected
+                </span>
+              </div>
+            ) : undefined}
             stackValueAside={isEvColumnTight}
             valueAside={(
               <div className={cn(
@@ -539,8 +561,10 @@ export default function App() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode: 'FAST' }),
                   })}
+                  disabled={!canConfigureCharger}
                   className={cn(
                     'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    !canConfigureCharger && 'cursor-not-allowed bg-white/5 text-gray-500',
                     chargerMode === 'FAST'
                       ? 'bg-cyan-600 text-white'
                       : 'bg-white/5 text-gray-300 hover:bg-white/10'
@@ -554,8 +578,10 @@ export default function App() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode: 'GREEN' }),
                   })}
+                  disabled={!canConfigureCharger}
                   className={cn(
                     'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    !canConfigureCharger && 'cursor-not-allowed bg-white/5 text-gray-500',
                     chargerMode === 'GREEN'
                       ? 'bg-emerald-600 text-white'
                       : 'bg-white/5 text-gray-300 hover:bg-white/10'
@@ -569,8 +595,10 @@ export default function App() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode: 'HYBRID' }),
                   })}
+                  disabled={!canConfigureCharger}
                   className={cn(
                     'rounded-lg px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors',
+                    !canConfigureCharger && 'cursor-not-allowed bg-white/5 text-gray-500',
                     chargerMode === 'HYBRID'
                       ? 'bg-amber-600 text-white'
                       : 'bg-white/5 text-gray-300 hover:bg-white/10'
@@ -1084,13 +1112,13 @@ export default function App() {
   );
 }
 
-function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, stackValueAside, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; stackValueAside?: boolean; compact?: boolean; className?: string }) {
+function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAside, stackValueAside, overlay, blurred, compact, className }: { title: string; value: string; unit: string; icon: React.ReactNode; trend?: 'up' | 'down' | 'neutral'; subtitle?: string; details?: React.ReactNode; valueAside?: React.ReactNode; stackValueAside?: boolean; overlay?: React.ReactNode; blurred?: boolean; compact?: boolean; className?: string }) {
   return (
     <div className={cn("min-w-0 bg-white/5 border border-white/10 rounded-2xl relative overflow-hidden group hover:bg-white/[0.07] transition-colors", compact ? "p-3 min-h-[118px]" : "p-4.5", className)}>
       <div className={cn("absolute top-0 right-0 pointer-events-none opacity-20 group-hover:opacity-40 transition-opacity", compact ? "p-3" : "p-4")}>
         {icon}
       </div>
-      <div className="relative z-10">
+      <div className={cn("relative z-10 transition-all", blurred && "blur-[1.5px] opacity-45 saturate-50") }>
         <p className={cn("uppercase tracking-widest text-gray-500 font-semibold", compact ? "text-[9px] mb-0.5" : "text-[10px] mb-1")}>{title}</p>
         <div className={cn("flex gap-3", valueAside ? (stackValueAside ? "flex-col items-start" : "flex-col items-start sm:flex-row sm:items-start sm:justify-between") : "items-baseline")}>
           <div className="flex items-baseline gap-1">
@@ -1110,6 +1138,7 @@ function StatCard({ title, value, unit, icon, trend, subtitle, details, valueAsi
         )}
         {details}
       </div>
+      {overlay}
     </div>
   );
 }
