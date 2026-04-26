@@ -34,6 +34,9 @@ const OCPP_HOST = process.env.OCPP_HOST ?? '0.0.0.0';
 const OCPP_PORT = Number(process.env.OCPP_PORT ?? 9100);
 const OCPP_PATH_PREFIX = process.env.OCPP_PATH_PREFIX ?? '/ocpp';
 const OCPP_HEARTBEAT_INTERVAL = Number(process.env.OCPP_HEARTBEAT_INTERVAL ?? 30);
+const OCPP_CONFIG_DEBOUNCE_MS = 5 * 60 * 1000;
+const MODBUS_RECONNECT_DELAY_MS = 10_000;
+const MODBUS_PORT_ROTATE_THRESHOLD = 3;
 
 if (MODBUS_PORTS.length === 0) {
   throw new Error('No valid Modbus ports configured. Set MODBUS_PORT or MODBUS_PORTS.');
@@ -262,6 +265,7 @@ let inverterData = {
 const socket = new net.Socket();
 const client = new ModbusClient.TCP(socket, SLAVE_ID);
 let modbusPortIndex = 0;
+let modbusConsecutiveConnectionFailures = 0;
 
 function currentModbusPort(): number {
   return MODBUS_PORTS[modbusPortIndex];
@@ -297,6 +301,8 @@ function generateCallId(): string {
   return String(++callIdCounter);
 }
 
+const lastOcppConfigAtByChargePoint = new Map<string, number>();
+
 let transactionIdCounter = 0;
 function generateTransactionId(): number {
   return ++transactionIdCounter;
@@ -304,6 +310,41 @@ function generateTransactionId(): number {
 
 function buildCall(action: string, payload: Record<string, any>): OcppCall {
   return [2, generateCallId(), action, payload];
+}
+
+function sendOcppCall(ws: WebSocket, chargePointId: string, action: string, payload: Record<string, any>): void {
+  if (ws.readyState !== ws.OPEN) {
+    return;
+  }
+
+  ws.send(JSON.stringify(buildCall(action, payload)));
+  console.log(`[${chargePointId}] → ${action}`);
+}
+
+function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string): void {
+  const now = Date.now();
+  const lastConfiguredAt = lastOcppConfigAtByChargePoint.get(chargePointId) ?? 0;
+
+  if (now - lastConfiguredAt < OCPP_CONFIG_DEBOUNCE_MS) {
+    console.log(`[${chargePointId}] Skipping telemetry reconfiguration (debounced < 5min)`);
+    return;
+  }
+
+  lastOcppConfigAtByChargePoint.set(chargePointId, now);
+
+  sendOcppCall(ws, chargePointId, 'GetConfiguration', {});
+  sendOcppCall(ws, chargePointId, 'ChangeConfiguration', {
+    key: 'MeterValueSampleInterval',
+    value: '10',
+  });
+  sendOcppCall(ws, chargePointId, 'ChangeConfiguration', {
+    key: 'MeterValuesSampledData',
+    value: 'Power.Active.Import,Energy.Active.Import.Register',
+  });
+  sendOcppCall(ws, chargePointId, 'TriggerMessage', {
+    requestedMessage: 'MeterValues',
+    connectorId: 1,
+  });
 }
 
 function buildCallResult(uniqueId: string, payload: Record<string, unknown>): OcppCallResult {
@@ -370,6 +411,7 @@ function handleOcppCall(
       })));
       emitCombinedData();
       console.log(`[${chargePointId}] BootNotification accepted`, payload);
+      configureChargerTelemetryIfNeeded(ws, chargePointId);
       return;
 
     case 'Heartbeat':
@@ -465,6 +507,7 @@ function handleOcppCall(
 socket.on('connect', () => {
   console.log(`Connected to Inverter via Modbus TCP (${MODBUS_HOST}:${currentModbusPort()})`);
   inverterData.connected = true;
+  modbusConsecutiveConnectionFailures = 0;
 });
 
 socket.on('error', (err: NodeJS.ErrnoException) => {
@@ -476,14 +519,21 @@ socket.on('close', () => {
   console.log('Modbus Connection Closed');
   inverterData.connected = false;
 
-  // Rotate through configured ports to support installations that use 6607 instead of 502.
-  modbusPortIndex = (modbusPortIndex + 1) % MODBUS_PORTS.length;
+  modbusConsecutiveConnectionFailures += 1;
+  if (
+    MODBUS_PORTS.length > 1
+    && modbusConsecutiveConnectionFailures >= MODBUS_PORT_ROTATE_THRESHOLD
+  ) {
+    modbusPortIndex = (modbusPortIndex + 1) % MODBUS_PORTS.length;
+    modbusConsecutiveConnectionFailures = 0;
+    console.warn(`Rotating Modbus port after persistent connection failures. Next port: ${currentModbusPort()}`);
+  }
 
   setTimeout(() => {
     if (!inverterData.connected) {
       connectModbus();
     }
-  }, 5000);
+  }, MODBUS_RECONNECT_DELAY_MS);
 });
 
 async function pollInverter() {
@@ -610,50 +660,6 @@ ocppWss.on('connection', (ws, req) => {
 
   console.log(`OCPP connection opened for ${chargePointId} (${req.socket.remoteAddress ?? 'unknown'})`);
 
-  // After a short delay (let the charger send BootNotification/StatusNotification first),
-  // send configuration commands to enable MeterValues reporting
-  setTimeout(() => {
-    if (ws.readyState !== ws.OPEN) return;
-
-    // 1) Discover current configuration
-    const getConfig = buildCall('GetConfiguration', {});
-    ws.send(JSON.stringify(getConfig));
-    console.log(`[${chargePointId}] → GetConfiguration`);
-
-    // 2) Set sampling interval to 10 seconds
-    setTimeout(() => {
-      if (ws.readyState !== ws.OPEN) return;
-      const setInterval = buildCall('ChangeConfiguration', {
-        key: 'MeterValueSampleInterval',
-        value: '10',
-      });
-      ws.send(JSON.stringify(setInterval));
-      console.log(`[${chargePointId}] → ChangeConfiguration MeterValueSampleInterval=10`);
-    }, 1000);
-
-    // 3) Set what measurands to sample
-    setTimeout(() => {
-      if (ws.readyState !== ws.OPEN) return;
-      const setMeasurands = buildCall('ChangeConfiguration', {
-        key: 'MeterValuesSampledData',
-        value: 'Power.Active.Import,Energy.Active.Import.Register',
-      });
-      ws.send(JSON.stringify(setMeasurands));
-      console.log(`[${chargePointId}] → ChangeConfiguration MeterValuesSampledData`);
-    }, 2000);
-
-    // 4) Ask charger to push a MeterValues immediately
-    setTimeout(() => {
-      if (ws.readyState !== ws.OPEN) return;
-      const trigger = buildCall('TriggerMessage', {
-        requestedMessage: 'MeterValues',
-        connectorId: 1,
-      });
-      ws.send(JSON.stringify(trigger));
-      console.log(`[${chargePointId}] → TriggerMessage MeterValues`);
-    }, 3000);
-  }, 3000);
-
   ws.on('message', (raw) => {
     try {
       const parsed = JSON.parse(raw.toString());
@@ -682,8 +688,6 @@ ocppWss.on('connection', (ws, req) => {
     console.log(`OCPP connection closed for ${chargePointId} (${code}) ${reason.toString()}`);
     chargerWs = null;
     chargerState.connected = false;
-    chargerState.status = 'Disconnected';
-    chargerState.powerW = 0;
     chargerState.lastUpdate = new Date().toISOString();
     emitCombinedData();
   });
