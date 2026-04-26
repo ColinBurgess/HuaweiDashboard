@@ -340,9 +340,10 @@ export default function App() {
   const chargerStartRequested = data?.chargerStartRequested ?? false;
   const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
   const greenSurplusW = Math.max(0, gridExport + carChargePower);
-  const greenTargetAmps = greenSurplusW / 230;
+  const greenSurplusAmps = greenSurplusW / 230;
   const greenMinimumAmps = 6;
-  const greenHasEnoughSurplus = greenTargetAmps >= greenMinimumAmps;
+  const greenMinimumW = greenMinimumAmps * 230;
+  const greenHasEnoughSurplus = greenSurplusAmps >= greenMinimumAmps;
   const canStartCharger = Boolean(data?.chargerConnected) && !chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
   const canStopCharger = Boolean(data?.chargerConnected) && (chargerStartRequested || (data?.chargerStatus ?? '') === 'Charging');
   const chargerStatusLabel = (() => {
@@ -601,18 +602,24 @@ export default function App() {
                   <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-gray-400">
                     <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                       <div className="flex items-center justify-between gap-3">
-                        <span>Surplus</span>
-                        <span className="font-mono text-emerald-300">{greenSurplusW.toFixed(0)}W</span>
+                        <span>Available</span>
+                        <div className="text-right font-mono text-emerald-300">
+                          <div>{greenSurplusAmps.toFixed(1)}A</div>
+                          <div className="text-[9px] text-emerald-400/80">{greenSurplusW.toFixed(0)}W</div>
+                        </div>
                       </div>
                       <div className="flex items-center justify-between gap-3">
-                        <span>Target</span>
-                        <span className="font-mono text-emerald-300">{greenTargetAmps.toFixed(1)}A</span>
+                        <span>Required</span>
+                        <div className="text-right font-mono text-yellow-300">
+                          <div>{greenMinimumAmps.toFixed(1)}A</div>
+                          <div className="text-[9px] text-yellow-300/80">{greenMinimumW.toFixed(0)}W</div>
+                        </div>
                       </div>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-3 border-t border-emerald-500/10 pt-1.5">
-                      <span>Minimum</span>
+                      <span>Status</span>
                       <span className={cn('font-mono', greenHasEnoughSurplus ? 'text-green-300' : 'text-yellow-300')}>
-                        {greenMinimumAmps}A {greenHasEnoughSurplus ? 'ready' : 'required'}
+                        {greenHasEnoughSurplus ? 'Surplus ready' : 'More surplus needed'}
                       </span>
                     </div>
                   </div>
