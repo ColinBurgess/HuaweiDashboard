@@ -390,10 +390,11 @@ export default function App() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             title="Solar Production"
-            value={`${data?.activePower ?? 0}`}
+            value={`${solarDcTotal}`}
             unit="W"
             icon={<Sun className="w-5 h-5 text-yellow-400" />}
-            trend={data && data.activePower > 0 ? "up" : "neutral"}
+            trend={solarDcTotal > 0 ? "up" : "neutral"}
+            subtitle="PV1 + PV2 DC"
             details={(
               <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
                 <CompactPvStat label="PV1" voltage={data?.pv1Voltage} current={data?.pv1Current} power={liveSolarSplit.pv1Power} />
