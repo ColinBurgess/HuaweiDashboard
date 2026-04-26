@@ -54,6 +54,9 @@ interface InverterData {
   chargerStatus: string;
   chargePointId: string;
   chargerLastUpdate: string;
+  chargingMode: 'FAST' | 'GREEN';
+  chargerStartRequested: boolean;
+  chargerCurrentLimitA: number | null;
   consumption: number;
   lastUpdate: string;
   connected: boolean;
@@ -331,6 +334,9 @@ export default function App() {
   const gridImport = Math.max(-(data?.gridPower ?? 0), 0);
   const batteryChargePower = Math.max(-(data?.batteryPower ?? 0), 0);
   const carChargePower = Math.max(data?.carChargePower ?? 0, 0);
+  const chargerMode = data?.chargingMode ?? 'FAST';
+  const chargerStartRequested = data?.chargerStartRequested ?? false;
+  const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
   const solarDcTotal = Math.max(data?.inputPower ?? 0, 0);
   const liveSolarSplit = composeStringPowers(
     solarDcTotal,
@@ -425,37 +431,73 @@ export default function App() {
             unit="W"
             icon={<Car className="w-5 h-5 text-cyan-400" />}
             trend={carChargePower > 0 ? 'up' : 'neutral'}
-            subtitle={data?.chargerConnected ? (data?.chargerStatus ?? 'Connected') : 'Disconnected'}
+            subtitle={data?.chargerConnected ? `${isGreenWaiting ? 'Waiting for solar' : (data?.chargerStatus ?? 'Connected')} · ${chargerMode}` : 'Disconnected'}
             details={(
               <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
                   <span>{data?.chargePointId ?? 'Unknown CP'}</span>
                   <span>{data?.chargerLastUpdate ? new Date(data.chargerLastUpdate).toLocaleTimeString() : '--:--:--'}</span>
                 </div>
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-gray-500">
+                  <span>Mode: {chargerMode}</span>
+                  <span>Limit: {data?.chargerCurrentLimitA ?? '--'}A</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => fetch('/api/charger/mode', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ mode: 'FAST' }),
+                    })}
+                    className={cn(
+                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
+                      chargerMode === 'FAST'
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                    )}
+                  >
+                    FAST
+                  </button>
+                  <button
+                    onClick={() => fetch('/api/charger/mode', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ mode: 'GREEN' }),
+                    })}
+                    className={cn(
+                      'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
+                      chargerMode === 'GREEN'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-white/5 text-gray-300 hover:bg-white/10'
+                    )}
+                  >
+                    GREEN
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => fetch('/api/charger/start', { method: 'POST' })}
-                    disabled={!data?.chargerConnected || data?.chargerStatus === 'Charging'}
+                    disabled={!data?.chargerConnected || (data?.chargerStatus === 'Charging' && !isGreenWaiting)}
                     className={cn(
                       'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      !data?.chargerConnected || data?.chargerStatus === 'Charging'
+                      !data?.chargerConnected || (data?.chargerStatus === 'Charging' && !isGreenWaiting)
                         ? 'bg-white/5 text-gray-500 cursor-not-allowed'
                         : 'bg-green-600 hover:bg-green-500 text-white'
                     )}
                   >
-                    Start
+                    {chargerMode === 'GREEN' ? (isGreenWaiting ? 'Armed' : 'Start Green') : 'Start'}
                   </button>
                   <button
                     onClick={() => fetch('/api/charger/stop', { method: 'POST' })}
-                    disabled={!data?.chargerConnected || data?.chargerStatus !== 'Charging'}
+                    disabled={!data?.chargerConnected || (!chargerStartRequested && data?.chargerStatus !== 'Charging')}
                     className={cn(
                       'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
-                      !data?.chargerConnected || data?.chargerStatus !== 'Charging'
+                      !data?.chargerConnected || (!chargerStartRequested && data?.chargerStatus !== 'Charging')
                         ? 'bg-white/5 text-gray-500 cursor-not-allowed'
                         : 'bg-red-600 hover:bg-red-500 text-white'
                     )}
                   >
-                    Stop
+                    {isGreenWaiting ? 'Cancel' : 'Stop'}
                   </button>
                 </div>
               </div>

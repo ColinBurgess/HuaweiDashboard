@@ -37,6 +37,13 @@ const OCPP_HEARTBEAT_INTERVAL = Number(process.env.OCPP_HEARTBEAT_INTERVAL ?? 30
 const OCPP_CONFIG_DEBOUNCE_MS = 5 * 60 * 1000;
 const MODBUS_RECONNECT_DELAY_MS = 10_000;
 const MODBUS_PORT_ROTATE_THRESHOLD = 3;
+const GREEN_CONTROL_LOOP_MS = 30_000;
+const GREEN_GRID_VOLTAGE = Number(process.env.GREEN_GRID_VOLTAGE ?? 230);
+const GREEN_MIN_CHARGING_AMPS = 6;
+const GREEN_MAX_CHARGING_AMPS = Number(process.env.GREEN_MAX_CHARGING_AMPS ?? 32);
+const GREEN_HYSTERESIS_AMPS = 1;
+
+type ChargingMode = 'FAST' | 'GREEN';
 
 if (MODBUS_PORTS.length === 0) {
   throw new Error('No valid Modbus ports configured. Set MODBUS_PORT or MODBUS_PORTS.');
@@ -214,6 +221,10 @@ type ChargerState = {
   status: string;
   powerW: number;
   transactionId?: number;
+  chargingMode: ChargingMode;
+  startRequested: boolean;
+  appliedCurrentLimitA?: number;
+  lastRequestedCurrentLimitA?: number;
   lastUpdate: string;
 };
 
@@ -227,6 +238,10 @@ const chargerState: ChargerState = {
   status: 'Disconnected',
   powerW: 0,
   transactionId: undefined,
+  chargingMode: 'FAST',
+  startRequested: false,
+  appliedCurrentLimitA: undefined,
+  lastRequestedCurrentLimitA: undefined,
   lastUpdate: new Date().toISOString(),
 };
 
@@ -257,6 +272,9 @@ let inverterData = {
   chargerStatus: 'Disconnected',
   chargePointId: 'Unknown',
   chargerLastUpdate: new Date().toISOString(),
+  chargingMode: 'FAST' as ChargingMode,
+  chargerStartRequested: false,
+  chargerCurrentLimitA: null as number | null,
   consumption: 0,
   lastUpdate: new Date().toISOString(),
   connected: false
@@ -283,6 +301,9 @@ function syncChargerIntoInverterData() {
   inverterData.chargerStatus = chargerState.status;
   inverterData.chargePointId = chargerState.chargePointId;
   inverterData.chargerLastUpdate = chargerState.lastUpdate;
+  inverterData.chargingMode = chargerState.chargingMode;
+  inverterData.chargerStartRequested = chargerState.startRequested;
+  inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
 }
 
 function emitCombinedData() {
@@ -345,6 +366,146 @@ function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string)
     requestedMessage: 'MeterValues',
     connectorId: 1,
   });
+}
+
+function canSendToCharger(): boolean {
+  return Boolean(chargerWs && chargerWs.readyState === chargerWs.OPEN);
+}
+
+function sendRemoteStartTransaction(): boolean {
+  if (!canSendToCharger() || !chargerWs) {
+    return false;
+  }
+
+  const cmd = buildCall('RemoteStartTransaction', { connectorId: 1, idTag: 'Dashboard' });
+  chargerWs.send(JSON.stringify(cmd));
+  chargerState.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+  console.log('[API] → RemoteStartTransaction');
+  return true;
+}
+
+function sendRemoteStopTransaction(): boolean {
+  if (!canSendToCharger() || !chargerWs) {
+    return false;
+  }
+
+  const txId = chargerState.transactionId ?? 0;
+  const cmd = buildCall('RemoteStopTransaction', { transactionId: txId });
+  chargerWs.send(JSON.stringify(cmd));
+  chargerState.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+  console.log(`[API] → RemoteStopTransaction txId=${txId}`);
+  return true;
+}
+
+function sendChargingLimit(amps: number): boolean {
+  if (!canSendToCharger() || !chargerWs) {
+    return false;
+  }
+
+  const sanitizedAmps = Math.max(
+    GREEN_MIN_CHARGING_AMPS,
+    Math.min(GREEN_MAX_CHARGING_AMPS, Math.round(amps)),
+  );
+
+  const cmd = buildCall('SetChargingProfile', {
+    connectorId: 1,
+    csChargingProfiles: {
+      chargingProfileId: 100,
+      stackLevel: 1,
+      chargingProfilePurpose: 'TxDefaultProfile',
+      chargingProfileKind: 'Absolute',
+      chargingSchedule: {
+        chargingRateUnit: 'A',
+        chargingSchedulePeriod: [
+          {
+            startPeriod: 0,
+            limit: sanitizedAmps,
+            numberPhases: 1,
+          },
+        ],
+      },
+    },
+  });
+
+  chargerWs.send(JSON.stringify(cmd));
+  chargerState.lastRequestedCurrentLimitA = sanitizedAmps;
+  chargerState.appliedCurrentLimitA = sanitizedAmps;
+  chargerState.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+  console.log(`[SMART] → SetChargingProfile TxDefaultProfile limit=${sanitizedAmps}A`);
+  return true;
+}
+
+function clearChargingLimit(): boolean {
+  if (!canSendToCharger() || !chargerWs) {
+    return false;
+  }
+
+  const cmd = buildCall('ClearChargingProfile', {
+    connectorId: 1,
+    chargingProfilePurpose: 'TxDefaultProfile',
+    stackLevel: 1,
+  });
+
+  chargerWs.send(JSON.stringify(cmd));
+  chargerState.lastRequestedCurrentLimitA = undefined;
+  chargerState.appliedCurrentLimitA = undefined;
+  chargerState.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+  console.log('[SMART] → ClearChargingProfile TxDefaultProfile');
+  return true;
+}
+
+function applyGreenChargingPolicy(): void {
+  if (chargerState.chargingMode !== 'GREEN') {
+    return;
+  }
+
+  if (!chargerState.startRequested) {
+    return;
+  }
+
+  if (!canSendToCharger()) {
+    return;
+  }
+
+  const gridExportW = Math.max(0, inverterData.gridPower);
+  const chargerPowerW = Math.max(0, chargerState.powerW);
+  const surplusW = gridExportW + chargerPowerW;
+
+  const rawTargetAmps = surplusW / GREEN_GRID_VOLTAGE;
+  const hasEnoughSurplus = rawTargetAmps >= GREEN_MIN_CHARGING_AMPS;
+
+  if (!hasEnoughSurplus) {
+    chargerState.appliedCurrentLimitA = undefined;
+    chargerState.lastRequestedCurrentLimitA = undefined;
+    if (chargerState.status === 'Charging') {
+      sendRemoteStopTransaction();
+    } else {
+      chargerState.lastUpdate = new Date().toISOString();
+      emitCombinedData();
+      console.log(`[SMART] Waiting for solar surplus >= ${GREEN_MIN_CHARGING_AMPS}A (current=${rawTargetAmps.toFixed(2)}A)`);
+    }
+    return;
+  }
+
+  const boundedTargetAmps = Math.max(
+    GREEN_MIN_CHARGING_AMPS,
+    Math.min(GREEN_MAX_CHARGING_AMPS, Math.floor(rawTargetAmps)),
+  );
+
+  const lastSent = chargerState.lastRequestedCurrentLimitA;
+  const shouldUpdateLimit = lastSent === undefined || Math.abs(boundedTargetAmps - lastSent) > GREEN_HYSTERESIS_AMPS;
+
+  if (shouldUpdateLimit) {
+    sendChargingLimit(boundedTargetAmps);
+  }
+
+  if (chargerState.status !== 'Charging') {
+    sendRemoteStartTransaction();
+  }
 }
 
 function buildCallResult(uniqueId: string, payload: Record<string, unknown>): OcppCallResult {
@@ -412,6 +573,9 @@ function handleOcppCall(
       emitCombinedData();
       console.log(`[${chargePointId}] BootNotification accepted`, payload);
       configureChargerTelemetryIfNeeded(ws, chargePointId);
+      if (chargerState.chargingMode === 'GREEN') {
+        applyGreenChargingPolicy();
+      }
       return;
 
     case 'Heartbeat':
@@ -465,6 +629,7 @@ function handleOcppCall(
       chargerState.connected = true;
       chargerState.chargePointId = chargePointId;
       chargerState.status = 'Charging';
+      chargerState.startRequested = true;
       chargerState.transactionId = generateTransactionId();
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {
@@ -477,8 +642,11 @@ function handleOcppCall(
 
     case 'StopTransaction':
       chargerState.status = 'Available';
+      chargerState.startRequested = false;
       chargerState.transactionId = undefined;
       chargerState.powerW = 0;
+      chargerState.appliedCurrentLimitA = undefined;
+      chargerState.lastRequestedCurrentLimitA = undefined;
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, { idTagInfo: { status: 'Accepted' } })));
       emitCombinedData();
@@ -765,28 +933,80 @@ ocppHttpServer.listen(OCPP_PORT, OCPP_HOST, () => {
 app.use(express.json());
 
 app.post('/api/charger/start', (req, res) => {
-  if (!chargerWs || chargerWs.readyState !== chargerWs.OPEN) {
+  if (!canSendToCharger()) {
     res.status(503).json({ error: 'Charger not connected' });
     return;
   }
-  const cmd = buildCall('RemoteStartTransaction', { connectorId: 1, idTag: 'Dashboard' });
-  chargerWs.send(JSON.stringify(cmd));
-  console.log(`[API] → RemoteStartTransaction`);
-  res.json({ status: 'sent' });
+
+  chargerState.startRequested = true;
+  chargerState.lastUpdate = new Date().toISOString();
+
+  if (chargerState.chargingMode === 'GREEN') {
+    applyGreenChargingPolicy();
+    res.json({
+      status: chargerState.status === 'Charging' ? 'sent' : 'armed',
+      mode: chargerState.chargingMode,
+      limitA: chargerState.appliedCurrentLimitA ?? null,
+    });
+    return;
+  }
+
+  clearChargingLimit();
+  sendRemoteStartTransaction();
+  res.json({ status: 'sent', mode: chargerState.chargingMode });
 });
 
 app.post('/api/charger/stop', (req, res) => {
-  if (!chargerWs || chargerWs.readyState !== chargerWs.OPEN) {
+  if (!canSendToCharger()) {
     res.status(503).json({ error: 'Charger not connected' });
     return;
   }
-  // Use known transactionId or 0 as fallback (charger will match the active transaction)
-  const txId = chargerState.transactionId ?? 0;
-  const cmd = buildCall('RemoteStopTransaction', { transactionId: txId });
-  chargerWs.send(JSON.stringify(cmd));
-  console.log(`[API] → RemoteStopTransaction txId=${txId}`);
-  res.json({ status: 'sent' });
+
+  chargerState.startRequested = false;
+  chargerState.appliedCurrentLimitA = undefined;
+  chargerState.lastRequestedCurrentLimitA = undefined;
+  clearChargingLimit();
+
+  if (chargerState.status === 'Charging') {
+    sendRemoteStopTransaction();
+    res.json({ status: 'sent' });
+    return;
+  }
+
+  chargerState.lastUpdate = new Date().toISOString();
+  emitCombinedData();
+  res.json({ status: 'cancelled' });
 });
+
+app.post('/api/charger/mode', (req, res) => {
+  const modeRaw = String(req.body?.mode ?? '').toUpperCase();
+  if (modeRaw !== 'FAST' && modeRaw !== 'GREEN') {
+    res.status(400).json({ error: 'Invalid mode. Use FAST or GREEN.' });
+    return;
+  }
+
+  const mode = modeRaw as ChargingMode;
+  chargerState.chargingMode = mode;
+  chargerState.lastUpdate = new Date().toISOString();
+
+  if (mode === 'FAST') {
+    clearChargingLimit();
+  } else {
+    applyGreenChargingPolicy();
+  }
+
+  emitCombinedData();
+  console.log(`[API] Charger mode changed to ${mode}`);
+  res.json({
+    status: 'ok',
+    mode: chargerState.chargingMode,
+    limitA: chargerState.appliedCurrentLimitA ?? null,
+  });
+});
+
+setInterval(() => {
+  applyGreenChargingPolicy();
+}, GREEN_CONTROL_LOOP_MS);
 
 app.get('/api/logs/live', (req, res) => {
   res.json(liveLogs);
