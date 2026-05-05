@@ -18,16 +18,21 @@ import {
   Home,
   Car,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  BarChart3,
+  PieChart as PieChartIcon
 } from 'lucide-react';
 import {
+  ResponsiveContainer,
   AreaChart,
   Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer
+  PieChart,
+  Pie,
+  Cell
 } from 'recharts';
 import { cn } from './lib/utils';
 
@@ -202,7 +207,27 @@ export default function App() {
   const [historicalData, setHistoricalData] = useState<HistoryPoint[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [topColumnWidths, setTopColumnWidths] = useState<[number, number, number]>([25, 25, 50]);
-  const [activeView, setActiveView] = useState<'dashboard' | 'logs'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'logs' | 'stats'>('dashboard');
+  const [statsData, setStatsData] = useState<{production: number, consumption: number, export: number, import: number, selfConsumption: number} | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+
+  useEffect(() => {
+    if (activeView === 'stats') {
+      const fetchStats = async () => {
+        setIsLoadingStats(true);
+        try {
+          const res = await fetch('/api/stats/summary');
+          const data = await res.json();
+          setStatsData(data);
+        } catch (err) {
+          console.error('Failed to fetch stats:', err);
+        } finally {
+          setIsLoadingStats(false);
+        }
+      };
+      fetchStats();
+    }
+  }, [activeView]);
 
 
 
@@ -534,6 +559,18 @@ export default function App() {
               >
                 <Clock className="w-4 h-4" />
                 Live Logs
+              </button>
+              <button
+                onClick={() => setActiveView('stats')}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all",
+                  activeView === 'stats'
+                    ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                    : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+                )}
+              >
+                <BarChart3 className="w-4 h-4" />
+                Statistics
               </button>
             </nav>
 
@@ -1027,7 +1064,7 @@ export default function App() {
             ) : (
               <div className="h-[300px] w-full">
 
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="colorPv1" x1="0" y1="0" x2="0" y2="1">
@@ -1159,7 +1196,7 @@ export default function App() {
             </div>
           </div>
         </motion.div>
-      ) : (
+      ) : activeView === 'logs' ? (
         <motion.div
           key="logs"
           initial={{ opacity: 0, y: 10 }}
@@ -1235,6 +1272,169 @@ export default function App() {
                 Logs are kept in memory for the current session (max 250 entries). For historical logs, check the backend log files in the <code>/logs</code> directory.
               </p>
             </div>
+          </div>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="stats"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.2 }}
+          className="space-y-6"
+        >
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 min-h-[calc(100vh-12rem)]">
+            <div className="flex items-center justify-between gap-4 mb-8">
+              <div>
+                <h3 className="text-2xl font-bold text-gray-100 flex items-center gap-3">
+                  <div className="w-10 h-10 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20">
+                    <BarChart3 className="w-6 h-6 text-indigo-400" />
+                  </div>
+                  Energy Statistics
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">Detailed power balance and accumulation (kWh)</p>
+              </div>
+              <div className="flex items-center gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
+                {['Day', 'Month', 'Year'].map((p) => (
+                  <button key={p} className={cn("px-4 py-1.5 text-xs font-bold rounded-lg transition-all uppercase tracking-wider", p === 'Day' ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "text-gray-500")}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {isLoadingStats ? (
+              <div className="h-64 flex items-center justify-center">
+                <RefreshCcw className="w-8 h-8 text-indigo-500 animate-spin" />
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {/* Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Current Day</p>
+                    <div className="flex items-baseline gap-2">
+                      <h4 className="text-3xl font-mono font-bold text-indigo-400">{(statsData?.production ?? 0).toFixed(2)}</h4>
+                      <span className="text-sm text-gray-500">kWh</span>
+                    </div>
+                  </div>
+                  <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Month Estimate</p>
+                    <div className="flex items-baseline gap-2">
+                      <h4 className="text-3xl font-mono font-bold text-indigo-400">{( (statsData?.production ?? 0) * 30).toFixed(2)}</h4>
+                      <span className="text-sm text-gray-500">kWh</span>
+                    </div>
+                  </div>
+                  <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Year Total</p>
+                    <div className="flex items-baseline gap-2">
+                      <h4 className="text-3xl font-mono font-bold text-indigo-400">--</h4>
+                      <span className="text-sm text-gray-500">kWh</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* Production Chart */}
+                  <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
+                    <h4 className="text-sm font-bold text-gray-300 mb-6 flex items-center gap-2">
+                      <Sun className="w-4 h-4 text-green-400" />
+                      Energy Production
+                    </h4>
+                    <div className="flex flex-col md:flex-row items-center gap-8">
+                      <div className="relative w-48 h-48">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                          <PieChart>
+                            <Pie
+                              data={[
+                                { name: 'Self-Consumption', value: statsData?.selfConsumption ?? 0 },
+                                { name: 'Exported', value: statsData?.export ?? 0 }
+                              ]}
+                              innerRadius={60}
+                              outerRadius={80}
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              <Cell fill="#4ade80" />
+                              <Cell fill="#a3e635" opacity={0.5} />
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                          <span className="text-2xl font-mono font-bold text-white">{(statsData?.production ?? 0).toFixed(2)}</span>
+                          <span className="text-[10px] text-gray-500 uppercase">kWh</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 space-y-4 w-full">
+                        <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-green-400" />
+                            <span className="text-xs text-gray-400">Self-Consumption</span>
+                          </div>
+                          <span className="text-xs font-mono font-bold">{(statsData?.selfConsumption ?? 0).toFixed(2)} kWh</span>
+                        </div>
+                        <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-green-400 opacity-50" />
+                            <span className="text-xs text-gray-400">Exported</span>
+                          </div>
+                          <span className="text-xs font-mono font-bold">{(statsData?.export ?? 0).toFixed(2)} kWh</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Consumption Chart */}
+                  <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
+                    <h4 className="text-sm font-bold text-gray-300 mb-6 flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-orange-400" />
+                      Energy Consumption
+                    </h4>
+                    <div className="flex flex-col md:flex-row items-center gap-8">
+                      <div className="relative w-48 h-48">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                          <PieChart>
+                            <Pie
+                              data={[
+                                { name: 'From PV', value: statsData?.selfConsumption ?? 0 },
+                                { name: 'Imported', value: statsData?.import ?? 0 }
+                              ]}
+                              innerRadius={60}
+                              outerRadius={80}
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              <Cell fill="#f97316" />
+                              <Cell fill="#fbbf24" opacity={0.5} />
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                          <span className="text-2xl font-mono font-bold text-white">{(statsData?.consumption ?? 0).toFixed(2)}</span>
+                          <span className="text-[10px] text-gray-500 uppercase">kWh</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 space-y-4 w-full">
+                        <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-orange-500" />
+                            <span className="text-xs text-gray-400">From PV</span>
+                          </div>
+                          <span className="text-xs font-mono font-bold">{(statsData?.selfConsumption ?? 0).toFixed(2)} kWh</span>
+                        </div>
+                        <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-yellow-500 opacity-50" />
+                            <span className="text-xs text-gray-400">Imported</span>
+                          </div>
+                          <span className="text-xs font-mono font-bold">{(statsData?.import ?? 0).toFixed(2)} kWh</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </motion.div>
       )}

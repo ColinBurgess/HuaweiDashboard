@@ -1660,6 +1660,17 @@ app.get('/api/logs/:date', (req, res) => {
   });
 });
 
+  // Stats API
+  app.get('/api/stats/summary', async (req, res) => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const stats = await calculateStatsForDate(today);
+      res.json(stats);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to calculate stats' });
+    }
+  });
+
 async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
@@ -1688,6 +1699,7 @@ async function startServer() {
       }
     });
   }
+  
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
@@ -1725,6 +1737,62 @@ app.get('/api/history/:date', (req, res) => {
     }
   });
 });
+
+async function calculateStatsForDate(date: string) {
+  const filePath = path.join(HISTORY_DIR, `${date}.jsonl`);
+  if (!fs.existsSync(filePath)) {
+    return { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter(Boolean);
+  
+  let totalProduction = 0; // Wh
+  let totalConsumption = 0; // Wh
+  let totalExport = 0; // Wh
+  let totalImport = 0; // Wh
+  let lastTime: number | null = null;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      const currentTime = new Date(entry.time).getTime();
+      
+      if (lastTime !== null) {
+        const deltaHours = (currentTime - lastTime) / (1000 * 3600);
+        
+        // Sumamos vatios-hora (Wh) usando las claves correctas del historial
+        totalProduction += (entry.inputPower ?? 0) * deltaHours;
+        totalConsumption += (entry.consumption ?? 0) * deltaHours;
+        
+        const gridPower = entry.gridPower ?? 0;
+        if (gridPower > 0) {
+          totalExport += gridPower * deltaHours;
+        } else {
+          totalImport += Math.abs(gridPower) * deltaHours;
+        }
+      }
+      
+      lastTime = currentTime;
+    } catch (e) {
+      continue;
+    }
+  }
+
+  const prodKwh = totalProduction / 1000;
+  const consKwh = totalConsumption / 1000;
+  const exportKwh = totalExport / 1000;
+  const importKwh = totalImport / 1000;
+  const selfConsumptionKwh = Math.max(0, prodKwh - exportKwh);
+
+  return {
+    production: prodKwh,
+    consumption: consKwh,
+    export: exportKwh,
+    import: importKwh,
+    selfConsumption: selfConsumptionKwh
+  };
+}
 
 startServer();
 

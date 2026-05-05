@@ -14,6 +14,9 @@ RUN npm install
 # Copiar el resto del código fuente
 COPY . .
 
+# Verificar tipos y sintaxis (evita errores de referencia en el navegador)
+RUN npm run lint
+
 # Construir el frontend para producción (genera la carpeta dist/)
 RUN npm run build
 
