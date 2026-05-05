@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "ocpp:dev": "tsx ocpp_server.ts",
     "build": "vite build",
-    "start": "node dist/server.cjs",
+    "start": "NODE_ENV=production tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

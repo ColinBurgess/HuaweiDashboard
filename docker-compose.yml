@@ -1,0 +1,22 @@
+services:
+  dashboard:
+    build: .
+    container_name: huawei-dashboard
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+      - "9100:9100"
+    env_file:
+      - .env
+    volumes:
+      - ./history:/app/history
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -6,9 +6,14 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import net from 'net';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+import 'dotenv/config';
 
 // @ts-ignore
 import { client as ModbusClient } from 'jsmodbus';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
@@ -26,9 +31,10 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
   .map((port) => Number(port.trim()))
   .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
 const SLAVE_ID = 1;
-const HISTORY_DIR = path.join(process.cwd(), 'history');
-const LOGS_DIR = path.join(process.cwd(), 'logs');
-const CHARGER_STATE_FILE = path.join(process.cwd(), 'charger-state.json');
+const HISTORY_DIR = path.resolve(__dirname, 'history');
+const LOGS_DIR = path.resolve(__dirname, 'logs');
+const DATA_DIR = path.resolve(__dirname, 'data');
+const CHARGER_STATE_FILE = path.resolve(DATA_DIR, 'charger-state.json');
 const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
 
@@ -73,6 +79,7 @@ if (!Number.isInteger(OCPP_PORT) || OCPP_PORT < 1 || OCPP_PORT > 65535) {
 
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
 fs.mkdirSync(LOGS_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 type RuntimeLogLevel = 'info' | 'warn' | 'error';
 
@@ -1667,10 +1674,18 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.resolve(__dirname, 'dist');
+    if (!fs.existsSync(distPath)) {
+      console.warn(`[WARN] Production directory not found at ${distPath}. Did you run 'npm run build'?`);
+    }
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Frontend build not found. Please run npm run build.');
+      }
     });
   }
   httpServer.listen(PORT, '0.0.0.0', () => {
