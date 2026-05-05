@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { motion, AnimatePresence } from 'framer-motion';
 import houseBackground from '../HouseBackground2.png';
 import {
   Zap,
@@ -201,6 +202,7 @@ export default function App() {
   const [historicalData, setHistoricalData] = useState<HistoryPoint[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [topColumnWidths, setTopColumnWidths] = useState<[number, number, number]>([25, 25, 50]);
+  const [activeView, setActiveView] = useState<'dashboard' | 'logs'>('dashboard');
 
 
 
@@ -374,8 +376,10 @@ export default function App() {
   const carChargePower = Math.max(data?.carChargePower ?? 0, 0);
   const chargerMode = data?.chargingMode ?? 'FAST';
   const chargerStartRequested = data?.chargerStartRequested ?? false;
+  const chargerOnline = Boolean(data?.chargerConnected);
   const chargerCableConnected = Boolean(data?.chargerCableConnected);
-  const showCableDisconnectedOverlay = Boolean(data?.chargerConnected) && !chargerCableConnected;
+  const showChargerOfflineOverlay = !chargerOnline;
+  const showCableDisconnectedOverlay = chargerOnline && !chargerCableConnected;
   const isGreenWaiting = chargerMode === 'GREEN' && chargerStartRequested && (data?.chargerStatus ?? '') !== 'Charging';
   const isSolarAwareMode = chargerMode === 'GREEN' || chargerMode === 'HYBRID';
   const greenSurplusW = Math.max(0, gridExport + carChargePower);
@@ -506,6 +510,35 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-6">
+            <nav className="hidden md:flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
+              <button
+                onClick={() => setActiveView('dashboard')}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all",
+                  activeView === 'dashboard'
+                    ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                    : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+                )}
+              >
+                <Activity className="w-4 h-4" />
+                Dashboard
+              </button>
+              <button
+                onClick={() => setActiveView('logs')}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all",
+                  activeView === 'logs'
+                    ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
+                    : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+                )}
+              >
+                <Clock className="w-4 h-4" />
+                Live Logs
+              </button>
+            </nav>
+
+            <div className="h-8 w-px bg-white/10 hidden md:block" />
+            
             <div className="hidden md:flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-wider text-gray-500">System Status</span>
               <div className="flex items-center gap-2">
@@ -522,7 +555,17 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+      <main className="max-w-7xl mx-auto p-4 md:p-6">
+        <AnimatePresence mode="wait">
+          {activeView === 'dashboard' ? (
+            <motion.div
+              key="dashboard"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-6"
+            >
         {/* Top Stats Grid */}
         <div
           ref={topGridRef}
@@ -575,10 +618,19 @@ export default function App() {
             unit="W"
             icon={<Car className="w-5 h-5 text-cyan-400" />}
             trend={carChargePower > 0 ? 'up' : 'neutral'}
-            subtitle={data?.chargerConnected ? chargerStatusLabel : 'Disconnected'}
-            blurred={showCableDisconnectedOverlay}
-            overlay={showCableDisconnectedOverlay ? (
-              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-xl border border-red-500/45 bg-red-500/10 backdrop-blur-[1px]">
+            subtitle={chargerOnline ? chargerStatusLabel : 'Offline'}
+            blurred={showChargerOfflineOverlay || showCableDisconnectedOverlay}
+            overlay={showChargerOfflineOverlay ? (
+              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-xl border border-gray-500/45 bg-gray-500/10 backdrop-blur-[2px]">
+                <div className="flex flex-col items-center gap-2">
+                  <span className="rounded-lg border border-gray-500/50 bg-gray-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-gray-300">
+                    Charger Offline
+                  </span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-tighter">Waiting for OCPP heartbeat</span>
+                </div>
+              </div>
+            ) : showCableDisconnectedOverlay ? (
+              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-xl border border-red-500/45 bg-red-500/10 backdrop-blur-[2px]">
                 <span className="rounded-lg border border-red-500/50 bg-red-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-red-200">
                   Cable disconnected
                 </span>
@@ -1103,45 +1155,90 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 text-[10px] text-gray-500 uppercase tracking-tighter">
             <CheckCircle2 className="w-3 h-3 text-green-500" />
-            Modbus TCP Connection Active
+              Modbus TCP Connection Active
+            </div>
           </div>
-        </div>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="logs"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.2 }}
+          className="space-y-6"
+        >
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 min-h-[calc(100vh-12rem)] flex flex-col">
+            <div className="flex items-center justify-between gap-4 mb-6">
+              <div>
+                <h3 className="text-xl font-bold text-gray-100 flex items-center gap-3">
+                  <div className="w-10 h-10 bg-cyan-500/10 rounded-xl flex items-center justify-center border border-cyan-500/20">
+                    <Clock className="w-6 h-6 text-cyan-400" />
+                  </div>
+                  Live System Logs
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">Real-time event stream from the Huawei Dashboard backend</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="px-3 py-1 bg-black/40 border border-white/10 rounded-lg text-[10px] font-mono text-cyan-400 uppercase tracking-widest">
+                  {liveLogs.length} Entries
+                </span>
+                <button 
+                  onClick={() => setLiveLogs([])}
+                  className="px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] font-bold text-red-400 uppercase tracking-widest hover:bg-red-500/20 transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
 
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <h3 className="font-semibold text-gray-200 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyan-400" />
-              Live Logs
-            </h3>
-            <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">
-              /api/logs/live
-            </span>
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/30 h-64 overflow-auto p-3 space-y-2">
-            {liveLogs.length === 0 ? (
-              <div className="text-sm text-gray-500">No logs yet.</div>
-            ) : (
-              liveLogs.slice().reverse().map((entry, index) => (
-                <div key={`${entry.time}-${index}`} className="border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
-                  <div className="flex items-center justify-between gap-4 text-[10px] uppercase tracking-[0.18em] text-gray-500">
-                    <span className={cn(
-                      'font-semibold',
-                      entry.level === 'error' && 'text-red-400',
-                      entry.level === 'warn' && 'text-yellow-400',
-                      entry.level === 'info' && 'text-cyan-400',
-                    )}>
-                      {entry.level}
-                    </span>
-                    <span>{new Date(entry.time).toLocaleTimeString()}</span>
+            <div className="flex-1 rounded-2xl border border-white/10 bg-black/40 overflow-hidden flex flex-col">
+              <div className="grid grid-cols-[100px_80px_1fr] px-6 py-3 border-b border-white/10 bg-white/5 text-[10px] uppercase tracking-widest text-gray-500 font-bold">
+                <span>Time</span>
+                <span>Level</span>
+                <span>Message</span>
+              </div>
+              <div className="flex-1 overflow-auto p-2 scrollbar-thin scrollbar-thumb-white/10">
+                {liveLogs.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-gray-500 font-mono text-sm">
+                    No logs recorded in this session.
                   </div>
-                  <div className="mt-1 text-xs text-gray-200 break-words whitespace-pre-wrap font-mono">
-                    {entry.message}
-                  </div>
-                </div>
-              ))
-            )}
+                ) : (
+                  liveLogs.slice().reverse().map((entry, index) => (
+                    <div 
+                      key={`${entry.time}-${index}`} 
+                      className="grid grid-cols-[100px_80px_1fr] px-4 py-2.5 hover:bg-white/[0.02] border-b border-white/5 last:border-b-0 transition-colors group"
+                    >
+                      <span className="text-[11px] font-mono text-gray-500 group-hover:text-gray-400">
+                        {new Date(entry.time).toLocaleTimeString([], { hour12: false })}
+                      </span>
+                      <span className={cn(
+                        'text-[10px] font-bold uppercase tracking-wider',
+                        entry.level === 'error' && 'text-red-400',
+                        entry.level === 'warn' && 'text-yellow-400',
+                        entry.level === 'info' && 'text-cyan-400',
+                      )}>
+                        {entry.level}
+                      </span>
+                      <div className="text-xs text-gray-300 break-words whitespace-pre-wrap font-mono leading-relaxed">
+                        {entry.message}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            
+            <div className="mt-4 p-4 rounded-xl bg-blue-500/5 border border-blue-500/10 flex items-center gap-3">
+              <Info className="w-4 h-4 text-blue-400" />
+              <p className="text-[11px] text-blue-300/80 leading-relaxed">
+                Logs are kept in memory for the current session (max 250 entries). For historical logs, check the backend log files in the <code>/logs</code> directory.
+              </p>
+            </div>
           </div>
-        </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
       </main>
     </div>
   );
