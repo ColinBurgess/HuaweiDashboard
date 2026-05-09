@@ -1671,6 +1671,56 @@ app.get('/api/logs/:date', (req, res) => {
     }
   });
 
+// Export functions for modular services
+export async function startInverterService() {
+  console.log('🚀 Starting Inverter Service (Polling + History)...');
+  restorePersistedChargerState(); // Needs this for syncing
+  connectModbus();
+  setInterval(pollInverter, 2000);
+}
+
+export async function startChargerService() {
+  console.log('🚀 Starting Charger Service (OCPP)...');
+  ocppHttpServer.listen(9100, '0.0.0.0', () => {
+    console.log('OCPP Server running on port 9100');
+  });
+}
+
+export async function startDashboardService() {
+  console.log('🚀 Starting Dashboard Service (API + UI)...');
+  await startServer();
+}
+
+// Inter-process state sharing (for modular mode)
+const STATE_FILE = path.join(DATA_DIR, 'live-state.json');
+
+function saveLiveState() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(inverterData));
+  } catch (err) {
+    // Ignore write errors
+  }
+}
+
+function loadLiveState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+      Object.assign(inverterData, data);
+    }
+  } catch (err) {
+    // Ignore read errors
+  }
+}
+
+// Update the pollInverter to save state if running in collector mode
+const originalPollInverter = pollInverter;
+// @ts-ignore
+pollInverter = async () => {
+  await originalPollInverter();
+  saveLiveState();
+};
+
 async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
@@ -1794,5 +1844,24 @@ async function calculateStatsForDate(date: string) {
   };
 }
 
-startServer();
+// Auto-start if run directly (Monolith mode)
+if (process.argv[1].endsWith('server.ts')) {
+  console.log('🏛 Running in MONOLITH mode...');
+  restorePersistedChargerState();
+  syncChargerIntoInverterData();
+  persistChargerStateIfChanged(true);
+  connectModbus();
+  setInterval(pollInverter, 2000);
+  
+  ocppHttpServer.listen(9100, '0.0.0.0', () => {
+    console.log('OCPP Server running on port 9100');
+  });
+  
+  startServer();
+}
+
+// If running as Dashboard in modular mode, we need to poll the state file
+if (process.env.SERVICE_ROLE === 'dashboard') {
+  setInterval(loadLiveState, 2000);
+}
 

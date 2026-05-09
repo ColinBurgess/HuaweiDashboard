@@ -8,30 +8,30 @@ El proyecto combina tres funciones principales:
 - Control inteligente del cargador EV con modos FAST, GREEN y HYBRID.
 - Persistencia local de histórico, logs y estado del cargador entre reinicios.
 
-## Estado actual
+## Arquitectura Modular
 
-Actualmente el proyecto se ejecuta como un proceso único que levanta:
+El proyecto ha evolucionado de un monolito a una arquitectura desacoplada que puede ejecutarse en servicios independientes mediante **Docker Compose**. Esto garantiza que la recogida de datos (Inversor/Cargador) sea ininterrumpida incluso si se reinicia la interfaz web.
 
-- API HTTP para el frontend.
-- Servidor OCPP WebSocket para el cargador.
-- Cliente Modbus TCP para el inversor.
-- Emisión de datos en tiempo real al frontend mediante Socket.io.
-
-No está desacoplado aún en servicios separados de inversor, cargador y frontend. El README refleja el estado actual del monolito, no una arquitectura futura.
+### Componentes:
+- **Inverter Collector**: Proceso dedicado al polling Modbus y registro de histórico.
+- **Charger Service**: Servidor OCPP 1.6 independiente.
+- **Dashboard UI**: Interfaz web (React) y API de consulta.
 
 ## Capacidades principales
 
 - Monitorización en tiempo real de producción solar, red, batería, temperatura y consumo doméstico.
 - Visualización del flujo energético y gráfico de potencia vs consumo.
+- **Módulo de Estadísticas**: Balance energético detallado (kWh) con gráficos de donuts estilo FusionSolar (Producción vs Consumo).
 - Histórico diario persistente en `history/YYYY-MM-DD.jsonl`.
 - Logs de sesión persistentes en `logs/YYYY-MM-DDTHH-MM-SSZ.jsonl`.
-- Persistencia de estado del cargador en `charger-state.json`.
+- Persistencia de estado del cargador en `data/charger-state.json`.
 - Control EV con modos FAST, GREEN y HYBRID.
 - Reconciliación automática tras reinicios o reconexiones OCPP.
 - Protección anti-loop ante `StopTransaction(reason=Other)` repetidos.
 - Soporte de límites OCPP tanto en amperios como en vatios según lo que soporte el cargador.
 - Precarga en la UI del histórico del día actual para que la vista Live no parezca vacía tras reiniciar.
 - Manejo endurecido de reconexiones OCPP para evitar que sockets obsoletos desarmen el control inteligente.
+- **Seguridad en Despliegue**: Verificación automática de tipos (Lint/TypeScript) antes de cada build de Docker.
 
 ## Requisitos previos
 
@@ -129,9 +129,21 @@ Genera el bundle del frontend en `dist/`.
 npm run lint
 ```
 
-### Producción
+### Producción (Docker)
 
-El script `npm start` existe en `package.json`, pero la ruta documentada históricamente (`dist/server.cjs`) no representa de forma fiable el empaquetado actual del backend. A día de hoy, el modo operativo validado para trabajar con el proyecto es `npm run dev`.
+El proyecto está optimizado para ejecutarse mediante `docker-compose` usando **perfiles** para elegir el modo de ejecución:
+
+#### Modo Modular (Recomendado)
+Separa el sistema en 3 contenedores. Permite actualizar la web sin detener la recogida de datos.
+```bash
+docker-compose --profile modular up -d --build
+```
+
+#### Modo Monolito
+Ejecuta todo en un único contenedor (estilo tradicional).
+```bash
+docker-compose --profile monolith up -d --build
+```
 
 ## Modos de carga EV
 
@@ -322,20 +334,23 @@ Los últimos 250 logs se mantienen en memoria y además se emiten en tiempo real
 ## Estructura actual del proyecto
 
 ```text
-server.ts            Backend principal: Modbus + OCPP + API + Socket.io
-ocpp_server.ts       Script auxiliar/experimental relacionado con OCPP
+server.ts            Núcleo del sistema: Lógica compartida, API y Monolito
+services/            Entry points para modo modular (inverter, charger, dashboard)
+ocpp_server.ts       Script auxiliar relacionado con OCPP
 diag_charger.ts      Herramienta auxiliar de diagnóstico
 scan_charger.ts      Herramienta auxiliar de descubrimiento/prueba
 scan_devices.ts      Herramienta auxiliar de red/dispositivos
 src/
-  App.tsx            Frontend principal React
+  App.tsx            Frontend principal React (Dashboard + Logs + Stats)
   main.tsx           Entrada del frontend
-  index.css          Estilos globales
+  index.css          Estilos globales (Premium Dark Mode)
   lib/utils.ts       Utilidades frontend
 history/             Histórico diario JSONL
 logs/                Logs de sesión JSONL
+data/                Estado persistido y Live State compartido
 dist/                Bundle frontend generado por Vite
-charger-state.json   Estado persistido del cargador
+Dockerfile           Build multietapa con verificación de tipos
+docker-compose.yml   Orquestación con soporte de perfiles
 .env.example         Configuración base mínima
 ```
 

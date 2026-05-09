@@ -1,22 +1,61 @@
+version: '3.8'
+
 services:
-  dashboard:
+  # --- MODO MONOLITO (Tradicional) ---
+  huawei-monolith:
     build: .
-    container_name: huawei-dashboard
+    container_name: huawei-dashboard-monolith
+    profiles: ["monolith"]
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "${APP_PORT:-3001}:3001"
       - "9100:9100"
-    env_file:
-      - .env
     volumes:
       - ./history:/app/history
       - ./logs:/app/logs
       - ./data:/app/data
-    environment:
-      - NODE_ENV=production
-      - PORT=3001
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    env_file:
+      - .env
+
+  # --- MODO MODULAR (Microservicios) ---
+  inverter-collector:
+    build: .
+    container_name: huawei-inverter-collector
+    profiles: ["modular"]
+    restart: unless-stopped
+    command: npm run service:inverter
+    volumes:
+      - ./history:/app/history
+      - ./logs:/app/logs
+      - ./data:/app/data
+    env_file:
+      - .env
+
+  charger-service:
+    build: .
+    container_name: huawei-charger-service
+    profiles: ["modular"]
+    restart: unless-stopped
+    command: npm run service:charger
+    ports:
+      - "9100:9100"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    env_file:
+      - .env
+
+  ui-dashboard:
+    build: .
+    container_name: huawei-ui-dashboard
+    profiles: ["modular"]
+    restart: unless-stopped
+    command: npm run service:dashboard
+    ports:
+      - "${APP_PORT:-3001}:3001"
+    volumes:
+      - ./history:/app/history
+      - ./logs:/app/logs
+      - ./data:/app/data
+    env_file:
+      - .env

@@ -10,7 +10,10 @@
     "start": "NODE_ENV=production tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "service:inverter": "NODE_ENV=production tsx services/inverter.ts",
+    "service:charger": "NODE_ENV=production tsx services/charger.ts",
+    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx services/dashboard.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
