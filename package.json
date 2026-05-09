@@ -4,16 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "ocpp:dev": "tsx ocpp_server.ts",
+    "dev": "tsx backend/server.ts",
+    "ocpp:dev": "tsx backend/scripts/ocpp_server.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production tsx server.ts",
+    "start": "NODE_ENV=production tsx backend/server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "service:inverter": "NODE_ENV=production tsx services/inverter.ts",
-    "service:charger": "NODE_ENV=production tsx services/charger.ts",
-    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx services/dashboard.ts"
+    "service:inverter": "NODE_ENV=production tsx backend/services/inverter.ts",
+    "service:charger": "NODE_ENV=production tsx backend/services/charger.ts",
+    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/services/dashboard.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

@@ -31,9 +31,9 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
   .map((port) => Number(port.trim()))
   .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
 const SLAVE_ID = 1;
-const HISTORY_DIR = path.resolve(__dirname, 'history');
-const LOGS_DIR = path.resolve(__dirname, 'logs');
-const DATA_DIR = path.resolve(__dirname, 'data');
+const HISTORY_DIR = path.resolve(__dirname, '../storage/history');
+const LOGS_DIR = path.resolve(__dirname, '../storage/logs');
+const DATA_DIR = path.resolve(__dirname, '../storage/data');
 const CHARGER_STATE_FILE = path.resolve(DATA_DIR, 'charger-state.json');
 const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
@@ -1735,7 +1735,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(__dirname, 'dist');
+    const distPath = path.resolve(__dirname, '../dist');
     if (!fs.existsSync(distPath)) {
       console.warn(`[WARN] Production directory not found at ${distPath}. Did you run 'npm run build'?`);
     }

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
-import houseBackground from '../HouseBackground2.png';
+import houseBackground from './assets/HouseBackground2.png';
 import {
   Zap,
   Sun,
