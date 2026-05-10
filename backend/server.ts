@@ -230,6 +230,8 @@ process.once('SIGTERM', () => handleShutdown('SIGTERM'));
 
 recordLifecycleLog(`Server started. Session log: ${path.basename(RUNTIME_LOG_FILE)}`, 'info', true);
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 
 // Helper functions for data conversion
 function u16ToStr(registers: any): string {
@@ -1313,6 +1315,8 @@ async function pollInverter() {
     console.warn('Modbus read failed (PV block):', err);
   }
 
+  await delay(60);
+
   try {
     const powerRes = await client.readHoldingRegisters(32064, 2);
     inverterData.inputPower = i32FromRegs(powerRes.response.body.values);
@@ -1329,6 +1333,8 @@ async function pollInverter() {
     console.warn('Modbus read failed (active power):', err);
   }
 
+  await delay(60);
+
   try {
     const tempStatusRes = await client.readHoldingRegisters(32087, 3);
     inverterData.temperature = tempStatusRes.response.body.values[0] / 10;
@@ -1342,12 +1348,16 @@ async function pollInverter() {
     const yieldRes = await client.readHoldingRegisters(32106, 2);
     inverterData.dailyYield = u32FromRegs(yieldRes.response.body.values) / 100;
 
+    await delay(60);
+
     const totalYieldRes = await client.readHoldingRegisters(32114, 2);
     inverterData.totalYield = u32FromRegs(totalYieldRes.response.body.values) / 100;
     sectionReadStatus.yields = true;
   } catch (err) {
     console.warn('Modbus read failed (yield counters):', err);
   }
+
+  await delay(60);
 
   try {
     const gridRes = await client.readHoldingRegisters(32066, 4);
@@ -1358,6 +1368,8 @@ async function pollInverter() {
     console.warn('Modbus read failed (grid voltage/frequency):', err);
   }
 
+  await delay(60);
+
   try {
     const meterRes = await client.readHoldingRegisters(37113, 2);
     inverterData.gridPower = i32FromRegs(meterRes.response.body.values);
@@ -1365,6 +1377,8 @@ async function pollInverter() {
   } catch (err) {
     console.warn('Modbus read failed (grid power meter):', err);
   }
+
+  await delay(60);
 
   try {
     const battPowerRes = await client.readHoldingRegisters(37001, 2);
