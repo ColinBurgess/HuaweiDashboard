@@ -20,7 +20,9 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   BarChart3,
-  PieChart as PieChartIcon
+  PieChart as PieChartIcon,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -210,24 +212,42 @@ export default function App() {
   const [activeView, setActiveView] = useState<'dashboard' | 'logs' | 'stats'>('dashboard');
   const [statsData, setStatsData] = useState<{production: number, consumption: number, export: number, import: number, selfConsumption: number} | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [statsPeriod, setStatsPeriod] = useState<'day' | 'month' | 'year'>('day');
+  const [statsDate, setStatsDate] = useState<Date>(new Date());
 
   useEffect(() => {
-    if (activeView === 'stats') {
-      const fetchStats = async () => {
-        setIsLoadingStats(true);
-        try {
-          const res = await fetch('/api/stats/summary');
-          const data = await res.json();
-          setStatsData(data);
-        } catch (err) {
-          console.error('Failed to fetch stats:', err);
-        } finally {
-          setIsLoadingStats(false);
+    const fetchStats = async () => {
+      setIsLoadingStats(true);
+      try {
+        let url = `/api/stats/${statsPeriod}?`;
+        if (statsPeriod === 'day') {
+          url += `date=${statsDate.toISOString().split('T')[0]}`;
+        } else if (statsPeriod === 'month') {
+          url += `year=${statsDate.getFullYear()}&month=${statsDate.getMonth() + 1}`;
+        } else if (statsPeriod === 'year') {
+          url += `year=${statsDate.getFullYear()}`;
         }
-      };
+        
+        const res = await fetch(url);
+        const data = await res.json();
+        setStatsData(data);
+      } catch (err) {
+        console.error('Failed to fetch stats:', err);
+      } finally {
+        setIsLoadingStats(false);
+      }
+    };
+
+    // Fetch stats if in stats view OR for the daily widget in dashboard view
+    const shouldFetch = activeView === 'stats' || (activeView === 'dashboard' && statsPeriod === 'day');
+    if (shouldFetch) {
       fetchStats();
     }
-  }, [activeView]);
+
+    const handleManualRefresh = () => fetchStats();
+    window.addEventListener('refresh-stats', handleManualRefresh);
+    return () => window.removeEventListener('refresh-stats', handleManualRefresh);
+  }, [activeView, statsPeriod, statsDate]);
 
 
 
@@ -1170,6 +1190,112 @@ export default function App() {
               </div>
             </div>
 
+            {/* Daily Energy Distribution Widget */}
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+                  <PieChartIcon className="w-4 h-4 text-indigo-400" />
+                  Daily Energy Balance
+                </h3>
+                <button 
+                  onClick={() => {
+                    // Trigger stats refresh by toggling a temp state or just calling the API
+                    // For simplicity, we can just trigger a re-fetch if we expose the function
+                    const event = new CustomEvent('refresh-stats');
+                    window.dispatchEvent(event);
+                  }}
+                  className={cn(
+                    "p-1.5 rounded-lg hover:bg-white/5 transition-colors text-gray-500 hover:text-indigo-400",
+                    isLoadingStats && "animate-spin"
+                  )}
+                  title="Refresh Statistics"
+                >
+                  <RefreshCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              
+              <div className="flex gap-4">
+                {/* Production Pie */}
+                <div className="flex-1 flex flex-col items-center">
+                  <div className="h-24 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[
+                            { name: 'Self Consumption', value: statsData?.selfConsumption ?? 0 },
+                            { name: 'Export to Grid', value: statsData?.export ?? 0 },
+                          ]}
+                          innerRadius={25}
+                          outerRadius={35}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          <Cell fill="#818cf8" /> {/* Indigo 400 */}
+                          <Cell fill="#10b981" /> {/* Emerald 500 */}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#000', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                          itemStyle={{ color: '#ccc' }}
+                          formatter={(value: number, name: string) => [`${value.toFixed(2)} kWh`, name]}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <span className="text-[9px] uppercase tracking-tighter text-gray-500 mt-1">Production</span>
+                  <p className="text-xs font-mono font-bold text-gray-300">{(statsData?.production ?? 0).toFixed(1)} <span className="text-[8px]">kWh</span></p>
+                </div>
+
+                {/* Consumption Pie */}
+                <div className="flex-1 flex flex-col items-center">
+                  <div className="h-24 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[
+                            { name: 'Solar Energy', value: statsData?.selfConsumption ?? 0 },
+                            { name: 'Grid Import', value: statsData?.import ?? 0 },
+                          ]}
+                          innerRadius={25}
+                          outerRadius={35}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          <Cell fill="#22d3ee" /> {/* Cyan 400 */}
+                          <Cell fill="#ef4444" /> {/* Red 500 */}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#000', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                          itemStyle={{ color: '#ccc' }}
+                          formatter={(value: number, name: string) => [`${value.toFixed(2)} kWh`, name]}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <span className="text-[9px] uppercase tracking-tighter text-gray-500 mt-1">Consumption</span>
+                  <p className="text-xs font-mono font-bold text-gray-300">{(statsData?.consumption ?? 0).toFixed(1)} <span className="text-[8px]">kWh</span></p>
+                </div>
+              </div>
+
+              <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-2 gap-y-2">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-indigo-400" />
+                  <span className="text-[10px] text-gray-400">Self: {statsData?.production > 0 ? (((statsData?.selfConsumption ?? 0) / statsData.production) * 100).toFixed(0) : 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-[10px] text-gray-400">Export: {statsData?.production > 0 ? (((statsData?.export ?? 0) / statsData.production) * 100).toFixed(0) : 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                  <span className="text-[10px] text-gray-400">Solar: {statsData?.consumption > 0 ? (((statsData?.selfConsumption ?? 0) / statsData.consumption) * 100).toFixed(0) : 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-red-500" />
+                  <span className="text-[10px] text-gray-400">Grid: {statsData?.consumption > 0 ? (((statsData?.import ?? 0) / statsData.consumption) * 100).toFixed(0) : 0}%</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -1291,12 +1417,55 @@ export default function App() {
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">Detailed power balance and accumulation (kWh)</p>
               </div>
-              <div className="flex items-center gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
-                {['Day', 'Month', 'Year'].map((p) => (
-                  <button key={p} className={cn("px-4 py-1.5 text-xs font-bold rounded-lg transition-all uppercase tracking-wider", p === 'Day' ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "text-gray-500")}>
-                    {p}
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
+                  {['Day', 'Month', 'Year'].map((p) => (
+                    <button 
+                      key={p} 
+                      onClick={() => setStatsPeriod(p.toLowerCase() as any)}
+                      className={cn(
+                        "px-4 py-1.5 text-xs font-bold rounded-lg transition-all uppercase tracking-wider", 
+                        statsPeriod === p.toLowerCase() 
+                          ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" 
+                          : "text-gray-500 hover:text-gray-300"
+                      )}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="flex items-center gap-4 bg-black/20 px-3 py-1.5 rounded-lg border border-white/5">
+                  <button 
+                    onClick={() => {
+                      const newDate = new Date(statsDate);
+                      if (statsPeriod === 'day') newDate.setDate(newDate.getDate() - 1);
+                      else if (statsPeriod === 'month') newDate.setMonth(newDate.getMonth() - 1);
+                      else newDate.setFullYear(newDate.getFullYear() - 1);
+                      setStatsDate(newDate);
+                    }}
+                    className="p-1 hover:bg-white/5 rounded transition-colors"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-gray-400" />
                   </button>
-                ))}
+                  <span className="text-xs font-bold text-gray-300 min-w-[100px] text-center">
+                    {statsPeriod === 'day' && statsDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {statsPeriod === 'month' && statsDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+                    {statsPeriod === 'year' && statsDate.getFullYear()}
+                  </span>
+                  <button 
+                    onClick={() => {
+                      const newDate = new Date(statsDate);
+                      if (statsPeriod === 'day') newDate.setDate(newDate.getDate() + 1);
+                      else if (statsPeriod === 'month') newDate.setMonth(newDate.getMonth() + 1);
+                      else newDate.setFullYear(newDate.getFullYear() + 1);
+                      setStatsDate(newDate);
+                    }}
+                    className="p-1 hover:bg-white/5 rounded transition-colors"
+                  >
+                    <ChevronRight className="w-4 h-4 text-gray-400" />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1309,23 +1478,25 @@ export default function App() {
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
-                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Current Day</p>
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Total Production</p>
                     <div className="flex items-baseline gap-2">
                       <h4 className="text-3xl font-mono font-bold text-indigo-400">{(statsData?.production ?? 0).toFixed(2)}</h4>
                       <span className="text-sm text-gray-500">kWh</span>
                     </div>
                   </div>
                   <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
-                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Month Estimate</p>
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Total Consumption</p>
                     <div className="flex items-baseline gap-2">
-                      <h4 className="text-3xl font-mono font-bold text-indigo-400">{( (statsData?.production ?? 0) * 30).toFixed(2)}</h4>
+                      <h4 className="text-3xl font-mono font-bold text-indigo-400">{(statsData?.consumption ?? 0).toFixed(2)}</h4>
                       <span className="text-sm text-gray-500">kWh</span>
                     </div>
                   </div>
                   <div className="bg-black/20 p-6 rounded-2xl border border-white/5">
-                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Year Total</p>
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Grid Balance</p>
                     <div className="flex items-baseline gap-2">
-                      <h4 className="text-3xl font-mono font-bold text-indigo-400">--</h4>
+                      <h4 className={cn("text-3xl font-mono font-bold", ((statsData?.export ?? 0) - (statsData?.import ?? 0)) >= 0 ? "text-green-400" : "text-red-400")}>
+                        {((statsData?.export ?? 0) - (statsData?.import ?? 0)).toFixed(2)}
+                      </h4>
                       <span className="text-sm text-gray-500">kWh</span>
                     </div>
                   </div>

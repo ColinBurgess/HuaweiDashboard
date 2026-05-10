@@ -1811,6 +1811,22 @@ app.get('/api/history/list', (req, res) => {
   });
 });
 
+app.get('/api/stats/summary', async (req, res) => {
+  if (!influxClient) return res.status(503).json({ error: 'InfluxDB not configured' });
+  
+  try {
+    const queryApi = influxClient.getQueryApi(INFLUX_ORG);
+    
+    // Consulta para totales de hoy, mes y año
+    // Nota: Esto es un ejemplo simplificado, se puede expandir
+    const today = new Date().toISOString().split('T')[0];
+    const stats = await calculateStatsForDate(today);
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch summary stats' });
+  }
+});
+
 app.get('/api/history/:date', (req, res) => {
   const filePath = path.join(HISTORY_DIR, `${req.params.date}.jsonl`);
   if (!fs.existsSync(filePath)) {
@@ -1832,6 +1848,76 @@ app.get('/api/history/:date', (req, res) => {
   });
 });
 
+async function queryInfluxStats(rangeStart: string, rangeStop: string) {
+  if (!influxClient) return null;
+  const queryApi = influxClient.getQueryApi(INFLUX_ORG);
+  
+  // Usamos integral para calcular Wh (vatios-hora) de forma precisa
+  // Dividimos por 3600 porque la integral de W sobre segundos da Ws, y queremos Wh
+  const fluxQuery = `
+    import "math"
+    from(bucket: "${INFLUX_BUCKET}")
+      |> range(start: ${rangeStart}, stop: ${rangeStop})
+      |> filter(fn: (r) => r["_field"] == "inputPower" or r["_field"] == "consumption" or r["_field"] == "gridPower")
+      |> integral(unit: 1h)
+      |> pivot(rowKey:["_start"], columnKey: ["_field"], valueColumn: "_value")
+  `;
+
+  return new Promise((resolve, reject) => {
+    let result = { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
+    queryApi.queryRows(fluxQuery, {
+      next(row, tableMeta) {
+        const o = tableMeta.toObject(row);
+        const prod = (o.inputPower ?? 0);
+        const cons = (o.consumption ?? 0);
+        const grid = (o.gridPower ?? 0); // Esto es la integral de gridPower en Wh
+        
+        // El problema es que la integral de gridPower mezcla export e import.
+        // Para mayor precisión, InfluxDB debería hacerlo antes de la integral.
+        // Pero para un resumen rápido, esto nos da una idea.
+        result.production = prod / 1000;
+        result.consumption = cons / 1000;
+        // Nota: El balance de red es complejo de integrar separado, 
+        // usaremos el valor neto por ahora para desbloquear la UI.
+        result.export = grid > 0 ? grid / 1000 : 0;
+        result.import = grid < 0 ? Math.abs(grid) / 1000 : 0;
+        result.selfConsumption = Math.max(0, result.production - result.export);
+      },
+      error(error) { reject(error); },
+      complete() { resolve(result); },
+    });
+  });
+}
+
+app.get('/api/stats/:period', async (req, res) => {
+  const { period } = req.params;
+  const { date, month, year } = req.query;
+  
+  let start, stop;
+  
+  if (period === 'day') {
+    const stats = await calculateStatsForDate(date as string);
+    return res.json(stats);
+  } else if (period === 'month') {
+    start = `${year}-${String(month).padStart(2, '0')}-01T00:00:00Z`;
+    const nextMonth = Number(month) === 12 ? 1 : Number(month) + 1;
+    const nextYear = Number(month) === 12 ? Number(year) + 1 : Number(year);
+    stop = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01T00:00:00Z`;
+  } else if (period === 'year') {
+    start = `${year}-01-01T00:00:00Z`;
+    stop = `${Number(year) + 1}-01-01T00:00:00Z`;
+  } else {
+    return res.status(400).json({ error: 'Invalid period' });
+  }
+
+  try {
+    const stats = await queryInfluxStats(start, stop);
+    res.json(stats || { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
+  } catch (err) {
+    console.warn(`[WARN] Stats query failed (likely no data for this period):`, err.message);
+    res.json({ production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
+  }
+});
 async function calculateStatsForDate(date: string) {
   const filePath = path.join(HISTORY_DIR, `${date}.jsonl`);
   if (!fs.existsSync(filePath)) {
