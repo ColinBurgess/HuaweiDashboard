@@ -446,14 +446,18 @@ const socket = new net.Socket();
 const client = new ModbusClient.TCP(socket, SLAVE_ID);
 let modbusPortIndex = 0;
 let modbusConsecutiveConnectionFailures = 0;
+let isConnecting = false;
 
 function currentModbusPort(): number {
   return MODBUS_PORTS[modbusPortIndex];
 }
 
 function connectModbus() {
+  if (isConnecting || socket.connecting || inverterData.connected) return;
+  
   const port = currentModbusPort();
-  console.log(`Connecting to Modbus ${MODBUS_HOST}:${port}...`);
+  isConnecting = true;
+  originalConsole.log(`Connecting to Modbus ${MODBUS_HOST}:${port}...`);
   socket.connect({ host: MODBUS_HOST, port });
 }
 
@@ -1248,12 +1252,14 @@ function handleOcppCall(
 }
 
 socket.on('connect', () => {
+  isConnecting = false;
   console.log(`Connected to Inverter via Modbus TCP (${MODBUS_HOST}:${currentModbusPort()})`);
   inverterData.connected = true;
   modbusConsecutiveConnectionFailures = 0;
 });
 
 socket.on('error', (err: NodeJS.ErrnoException) => {
+  isConnecting = false;
   console.error('Modbus Socket Error:', err.message);
   inverterData.connected = false;
 });
@@ -1446,14 +1452,6 @@ async function pollInverter() {
 }
 
 
-// Initial connection
-restorePersistedChargerState();
-syncChargerIntoInverterData();
-persistChargerStateIfChanged(true);
-connectModbus();
-
-// Poll every 2 seconds
-setInterval(pollInverter, 2000);
 
 const ocppHttpServer = createServer((req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -1739,7 +1737,7 @@ export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
   restorePersistedChargerState(); // Needs this for syncing
   connectModbus();
-  setInterval(pollInverter, 2000);
+  setInterval(pollInverter, 5000);
 }
 
 export async function startChargerService() {
