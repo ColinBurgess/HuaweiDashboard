@@ -1216,12 +1216,22 @@ function applySmartChargingPolicy(): void {
 }
 
 function reconcileChargerControlState(trigger: string): void {
+  const isCharger = process.env.SERVICE_ROLE === 'charger';
+  const isMonolith = process.env.START_MONOLITH === 'true';
+  const isOperational = isCharger || isMonolith;
+
   console.log(
     `[RECON] trigger=${trigger} mode=${chargerState.chargingMode} startRequested=${chargerState.startRequested} connected=${chargerState.connected} status=${chargerState.status} appliedLimitA=${chargerState.appliedCurrentLimitA ?? 'none'} txId=${chargerState.transactionId ?? 'none'}`,
   );
 
+  // If no start requested, ensure we are stopped
   if (!chargerState.startRequested) {
-    console.log('[RECON] No start requested, reconciliation completed without action');
+    if (isOperational && (chargerState.status === 'Charging' || chargerState.status === 'SuspendedEV' || chargerState.status === 'SuspendedEVSE')) {
+      console.log('[RECON] Stop requested but charger is active — sending RemoteStopTransaction');
+      sendRemoteStopTransaction();
+    } else {
+      console.log('[RECON] No start requested, reconciliation completed without action');
+    }
     return;
   }
 
@@ -1237,23 +1247,34 @@ function reconcileChargerControlState(trigger: string): void {
     stopReasonOtherCooldownUntil = 0;
   }
 
-  if (chargerState.chargingMode === 'FAST') {
-    console.log('[RECON] FAST mode armed, no smart-limit reconciliation required');
-    return;
-  }
-
   if (!canSendToCharger()) {
-    console.log('[RECON] Smart mode armed but charger socket is not ready yet');
+    console.log('[RECON] Command armed but charger socket is not ready yet');
     return;
   }
 
-    if (chargerState.status === 'Unavailable') {
-      console.log('[RECON] Charger is Unavailable (controlled externally, e.g. FusionSolar PV mode) — skipping smart policy');
-      return;
-    }
+  if (chargerState.status === 'Unavailable') {
+    console.log('[RECON] Charger is Unavailable (controlled externally) — skipping control logic');
+    return;
+  }
 
-    console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
-    applySmartChargingPolicy();
+  // Logic for FAST mode (direct start with max limit)
+  if (chargerState.chargingMode === 'FAST') {
+    if (chargerState.status !== 'Charging') {
+      console.log('[RECON] FAST mode start — sending max limit and start command');
+      sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
+      sendRemoteStartTransaction();
+    } else {
+      console.log('[RECON] FAST mode active and charging, ensuring max limit');
+      if (chargerState.appliedCurrentLimitA !== GREEN_MAX_CHARGING_AMPS) {
+        sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
+      }
+    }
+    return;
+  }
+
+  // Logic for Smart Modes (GREEN / HYBRID)
+  console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
+  applySmartChargingPolicy();
 }
 
 function buildCallResult(uniqueId: string, payload: Record<string, unknown>): OcppCallResult {
