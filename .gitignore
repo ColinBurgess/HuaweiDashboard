@@ -8,4 +8,5 @@ logs/*.jsonl
 charger-state.json
 charger-state.json.tmp
 *.log
+storage/
 .DS_Store
