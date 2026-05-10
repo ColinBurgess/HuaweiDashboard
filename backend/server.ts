@@ -605,14 +605,56 @@ function emitCombinedData() {
 
   io.emit('inverter-data', inverterData);
   
-  // If we are a data producer, save our updates to the shared live state
-  if (!isMonolith && !isDashboard && (isCharger || isCollector)) {
+  // Each service saves its own part of the state to its own file to avoid clobbering others
+  if (!isMonolith) {
     saveLiveState();
   }
+}
 
-  if (isDashboard) {
-    // We avoid periodic emission logs to keep the UI clean. 
-    // Only interesting events or errors should be logged.
+function saveLiveState() {
+  const role = process.env.SERVICE_ROLE || 'monolith';
+  const targetFile = path.resolve(DATA_DIR, `live-state-${role}.json`);
+  
+  try {
+    // We only save fields this service is responsible for to minimize the file size and merge conflicts
+    // but for simplicity and robustness, we can save the whole object and let loadLiveState handle the merge.
+    fs.writeFileSync(targetFile, JSON.stringify(inverterData, null, 2));
+  } catch (err) {
+    originalConsole.error(`[ERROR] Failed to save live state for ${role}:`, err);
+  }
+}
+
+function loadLiveState() {
+  try {
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('live-state-') && f.endsWith('.json'));
+    
+    for (const file of files) {
+      const filePath = path.join(DATA_DIR, file);
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      
+      // Special handling for services health to avoid clobbering
+      if (data.services) {
+        inverterData.services = { ...inverterData.services, ...data.services };
+        delete data.services;
+      }
+
+      // Merge the rest. The order of files might matter, but usually roles don't overlap in fields.
+      Object.assign(inverterData, data);
+    }
+
+    // Sync back to chargerState so the API and reconciliation logic see the same status
+    chargerState.connected = inverterData.chargerConnected;
+    chargerState.cableConnected = inverterData.chargerCableConnected;
+    chargerState.status = inverterData.chargerStatus;
+    chargerState.chargePointId = inverterData.chargePointId;
+    chargerState.lastUpdate = inverterData.chargerLastUpdate;
+    chargerState.chargingMode = inverterData.chargingMode;
+    chargerState.startRequested = inverterData.chargerStartRequested;
+    chargerState.appliedCurrentLimitA = inverterData.chargerCurrentLimitA ?? undefined;
+
+    emitCombinedData();
+  } catch (error) {
+    // It's okay if some files don't exist yet
   }
 }
 
@@ -1929,31 +1971,6 @@ export function saveLiveState() {
   }
 }
 
-export function loadLiveState() {
-  try {
-    if (fs.existsSync(LIVE_STATE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(LIVE_STATE_FILE, 'utf8'));
-      
-      // Merge services health data separately to avoid clobbering other services' heartbeats
-      if (data.services) {
-        inverterData.services = { ...inverterData.services, ...data.services };
-        delete data.services;
-      }
-
-      Object.assign(inverterData, data);
-
-      // Sync back to chargerState so the API and reconciliation logic see the same status
-      chargerState.connected = inverterData.chargerConnected;
-      chargerState.cableConnected = inverterData.chargerCableConnected;
-      chargerState.status = inverterData.chargerStatus;
-      chargerState.chargePointId = inverterData.chargePointId;
-      chargerState.lastUpdate = inverterData.chargerLastUpdate;
-      chargerState.chargingMode = inverterData.chargingMode;
-      chargerState.startRequested = inverterData.chargerStartRequested;
-      chargerState.appliedCurrentLimitA = inverterData.chargerCurrentLimitA ?? undefined;
-
-      emitCombinedData();
-    }
   } catch (error) {
     console.error(`[ERROR] loadLiveState failed:`, error);
   }
@@ -1998,10 +2015,34 @@ async function startServer() {
       }
     });
   }
-  
+  startLogWatcher();
+
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`🚀 Dashboard API listening on port ${PORT}`);
+    recordLifecycleLog(`Dashboard API started on port ${PORT}`);
   });
+}
+
+function saveChargerState() {
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+  const isCharger = process.env.SERVICE_ROLE === 'charger';
+  const isMonolith = process.env.START_MONOLITH === 'true';
+
+  if (isMonolith || isCharger) {
+    try {
+      fs.writeFileSync(CHARGER_STATE_FILE, JSON.stringify(chargerState, null, 2));
+    } catch (err) {
+      originalConsole.error('Error saving charger state:', err);
+    }
+  }
+  
+  // In modular mode, we also update the shared live state
+  if (!isMonolith) {
+    if (isCharger || isDashboard) {
+      syncChargerIntoInverterData();
+      saveLiveState();
+    }
+  }
 }
 
 // History API

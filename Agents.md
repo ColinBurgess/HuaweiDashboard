@@ -11,9 +11,12 @@ El sistema ha evolucionado de un monolito a una arquitectura **Modular (Microser
 3.  **Dashboard Service (`dashboard`)**: Servidor API Express y Frontend Vite.
 
 ### Comunicación Inter-procesos (IPC)
-No utilizamos Redis ni colas de mensajes. La comunicación se realiza a través de un archivo de estado compartido en disco:
--   **Ruta**: `storage/data/live-state.json`
--   **Mecánica**: Cada servicio carga este archivo cada 1s (`loadLiveState`), actualiza su parte del estado en memoria, y lo guarda (`saveLiveState`).
+No utilizamos Redis ni colas de mensajes. La comunicación se realiza a través de archivos de estado compartidos en disco para evitar condiciones de carrera:
+-   **Mecánica**: Cada servicio es "dueño" de su propio archivo:
+    -   `storage/data/live-state-collector.json` (Datos Inversor)
+    -   `storage/data/live-state-charger.json` (Estado Cargador)
+    -   `storage/data/live-state-dashboard.json` (Comandos de Usuario)
+-   **Sincronización**: Cada servicio carga TODOS estos archivos cada 1s (`loadLiveState`), los combina en memoria y guarda su parte proporcional.
 
 ## Detalles Técnicos Clave
 -   **Puertos**:
