@@ -894,7 +894,10 @@ function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string)
 }
 
 function canSendToCharger(): boolean {
-  return Boolean(chargerWs && chargerWs.readyState === chargerWs.OPEN);
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+  // In dashboard mode, we allow "sending" to arm the command in the shared state
+  if (isDashboard) return true;
+  return Boolean(chargerWs && chargerWs.readyState === (chargerWs.OPEN ?? 1));
 }
 
 function sendRemoteStartTransaction(): boolean {
@@ -1653,6 +1656,8 @@ ocppWss.on('connection', (ws, req) => {
 app.use(express.json());
 
 app.post('/api/charger/start', (req, res) => {
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+  
   if (!canSendToCharger()) {
     res.status(503).json({ error: 'Charger not connected' });
     return;
@@ -1660,6 +1665,12 @@ app.post('/api/charger/start', (req, res) => {
 
   chargerState.startRequested = true;
   chargerState.lastUpdate = new Date().toISOString();
+
+  if (isDashboard) {
+    saveLiveState();
+    res.json({ status: 'armed', mode: chargerState.chargingMode });
+    return;
+  }
 
   if (chargerState.chargingMode === 'GREEN' || chargerState.chargingMode === 'HYBRID') {
     reconcileChargerControlState('ApiStart');
@@ -1683,6 +1694,8 @@ app.post('/api/charger/start', (req, res) => {
 });
 
 app.post('/api/charger/stop', (req, res) => {
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+
   if (!canSendToCharger()) {
     res.status(503).json({ error: 'Charger not connected' });
     return;
@@ -1692,6 +1705,13 @@ app.post('/api/charger/stop', (req, res) => {
   chargerState.startRequested = false;
   chargerState.appliedCurrentLimitA = undefined;
   chargerState.lastRequestedCurrentLimitA = undefined;
+  
+  if (isDashboard) {
+    saveLiveState();
+    res.json({ status: 'sent' });
+    return;
+  }
+
   clearChargingLimit();
 
   if (chargerState.status === 'Charging') {
@@ -1707,6 +1727,7 @@ app.post('/api/charger/stop', (req, res) => {
 });
 
 app.post('/api/charger/mode', (req, res) => {
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
   const modeRaw = String(req.body?.mode ?? '').toUpperCase();
   if (modeRaw !== 'FAST' && modeRaw !== 'GREEN' && modeRaw !== 'HYBRID') {
     res.status(400).json({ error: 'Invalid mode. Use FAST, GREEN or HYBRID.' });
@@ -1717,7 +1738,9 @@ app.post('/api/charger/mode', (req, res) => {
   chargerState.chargingMode = mode;
   chargerState.lastUpdate = new Date().toISOString();
 
-  if (mode === 'FAST') {
+  if (isDashboard) {
+    saveLiveState();
+  } else if (mode === 'FAST') {
     clearChargingLimit();
   } else {
     reconcileChargerControlState('ApiModeChange');
@@ -1918,6 +1941,17 @@ export function loadLiveState() {
       }
 
       Object.assign(inverterData, data);
+
+      // Sync back to chargerState so the API and reconciliation logic see the same status
+      chargerState.connected = inverterData.chargerConnected;
+      chargerState.cableConnected = inverterData.chargerCableConnected;
+      chargerState.status = inverterData.chargerStatus;
+      chargerState.chargePointId = inverterData.chargePointId;
+      chargerState.lastUpdate = inverterData.chargerLastUpdate;
+      chargerState.chargingMode = inverterData.chargingMode;
+      chargerState.startRequested = inverterData.chargerStartRequested;
+      chargerState.appliedCurrentLimitA = inverterData.chargerCurrentLimitA ?? undefined;
+
       emitCombinedData();
     }
   } catch (error) {
