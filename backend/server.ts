@@ -600,7 +600,8 @@ function emitCombinedData() {
   }
 
   if (isDashboard) {
-    console.log(`[WS] Emitted inverter-data at ${new Date().toISOString()}`);
+    // We avoid periodic emission logs to keep the UI clean. 
+    // Only interesting events or errors should be logged.
   }
 }
 
