@@ -526,7 +526,8 @@ let inverterData = {
   chargerCurrentLimitA: null as number | null,
   consumption: 0,
   lastUpdate: new Date().toISOString(),
-  connected: false
+  connected: false,
+  services: {} as Record<string, { lastHeartbeat: string, status: string, details?: string }>
 };
 
 const socket = new net.Socket();
@@ -578,6 +579,16 @@ function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined 
   }
 
   return undefined;
+}
+
+function updateServiceHeartbeat(status = 'OK', details?: string) {
+  const role = process.env.SERVICE_ROLE || 'monolith';
+  inverterData.services[role] = {
+    lastHeartbeat: new Date().toISOString(),
+    status,
+    details
+  };
+  emitCombinedData();
 }
 
 function emitCombinedData() {
@@ -1828,6 +1839,13 @@ export async function startInverterService() {
   restorePersistedChargerState(); 
   connectModbus();
   setInterval(pollInverter, 1000);
+  
+  // Health heartbeat
+  setInterval(() => {
+    const status = inverterData.connected ? 'OK' : 'Error (Disconnected)';
+    const details = inverterData.connected ? `Polling at ${currentModbusPort()}` : 'Modbus connection failed';
+    updateServiceHeartbeat(status, details);
+  }, 10000);
 }
 
 export async function startChargerService() {
@@ -1845,6 +1863,13 @@ export async function startChargerService() {
     applySmartChargingPolicy();
   }, GREEN_CONTROL_LOOP_MS);
 
+  // Health heartbeat
+  setInterval(() => {
+    const status = chargerState.connected ? 'OK' : 'Disconnected';
+    const details = chargerState.connected ? `CP: ${chargerState.chargePointId}` : 'Waiting for connection';
+    updateServiceHeartbeat(status, details);
+  }, 10000);
+
   ocppHttpServer.on('error', (error) => {
     console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
   });
@@ -1855,6 +1880,17 @@ export async function startChargerService() {
 
 export async function startDashboardService() {
   console.log('🚀 Starting Dashboard Service (API + UI)...');
+  
+  // In modular mode, we need to poll the state file
+  if (process.env.SERVICE_ROLE === 'dashboard') {
+    setInterval(loadLiveState, 1000);
+    
+    // Health heartbeat
+    setInterval(() => {
+      updateServiceHeartbeat('OK', `Clients: ${io.engine.clientsCount}`);
+    }, 10000);
+  }
+
   await startServer();
 }
 
@@ -1874,11 +1910,18 @@ export function loadLiveState() {
   try {
     if (fs.existsSync(LIVE_STATE_FILE)) {
       const data = JSON.parse(fs.readFileSync(LIVE_STATE_FILE, 'utf8'));
+      
+      // Merge services health data separately to avoid clobbering other services' heartbeats
+      if (data.services) {
+        inverterData.services = { ...inverterData.services, ...data.services };
+        delete data.services;
+      }
+
       Object.assign(inverterData, data);
       emitCombinedData();
     }
-  } catch (err) {
-    console.error(`[ERROR] loadLiveState failed:`, err);
+  } catch (error) {
+    console.error(`[ERROR] loadLiveState failed:`, error);
   }
 }
 
@@ -2119,4 +2162,3 @@ if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts
 if (process.env.SERVICE_ROLE === 'dashboard') {
   setInterval(loadLiveState, 1000);
 }
-

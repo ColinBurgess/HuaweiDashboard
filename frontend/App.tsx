@@ -69,6 +69,7 @@ interface InverterData {
   consumption: number;
   lastUpdate: string;
   connected: boolean;
+  services?: Record<string, { lastHeartbeat: string, status: string, details?: string }>;
 }
 
 
@@ -1318,7 +1319,66 @@ export default function App() {
               Modbus TCP Connection Active
             </div>
           </div>
-        </motion.div>
+          {/* InfluxDB / Storage Status Info */}
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+          <h3 className="font-semibold text-gray-200 mb-6 flex items-center gap-2">
+            <RefreshCcw className="w-4 h-4 text-indigo-400" />
+            System Health & Service Status
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {['collector', 'charger', 'dashboard'].map((role) => {
+              const service = data?.services?.[role];
+              const lastHeartbeat = service?.lastHeartbeat;
+              const isOnline = lastHeartbeat && (Date.now() - new Date(lastHeartbeat).getTime()) < 30000;
+              const isWarning = lastHeartbeat && (Date.now() - new Date(lastHeartbeat).getTime()) >= 30000 && (Date.now() - new Date(lastHeartbeat).getTime()) < 90000;
+              
+              return (
+                <div key={role} className="bg-black/30 border border-white/5 rounded-xl p-4 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "w-2 h-2 rounded-full",
+                        isOnline ? "bg-green-500 animate-pulse" : isWarning ? "bg-yellow-500" : "bg-red-500"
+                      )} />
+                      <span className="text-xs font-bold uppercase tracking-widest text-gray-300">
+                        {role === 'collector' ? 'Inverter Service' : role === 'charger' ? 'Charger Service' : 'UI Dashboard'}
+                      </span>
+                    </div>
+                    <span className={cn(
+                      "text-[10px] font-bold px-2 py-0.5 rounded-full border",
+                      isOnline ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"
+                    )}>
+                      {isOnline ? 'ONLINE' : 'OFFLINE'}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-tighter">
+                      <span>Status</span>
+                      <span className={cn("font-medium", isOnline ? "text-gray-300" : "text-gray-600")}>
+                        {service?.status || 'Unknown'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-tighter">
+                      <span>Heartbeat</span>
+                      <span className="font-mono">
+                        {lastHeartbeat ? new Date(lastHeartbeat).toLocaleTimeString() : '--:--:--'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {service?.details && (
+                    <div className="mt-1 pt-2 border-t border-white/5 text-[9px] text-gray-500 italic truncate">
+                      {service.details}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </motion.div>
       ) : activeView === 'logs' ? (
         <motion.div
           key="logs"
