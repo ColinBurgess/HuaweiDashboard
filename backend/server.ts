@@ -550,15 +550,27 @@ function connectModbus() {
 }
 
 function syncChargerIntoInverterData() {
-  inverterData.carChargePower = Math.max(0, chargerState.powerW);
-  inverterData.chargerConnected = chargerState.connected;
-  inverterData.chargerCableConnected = chargerState.cableConnected;
-  inverterData.chargerStatus = chargerState.status;
-  inverterData.chargePointId = chargerState.chargePointId;
-  inverterData.chargerLastUpdate = chargerState.lastUpdate;
-  inverterData.chargingMode = chargerState.chargingMode;
-  inverterData.chargerStartRequested = chargerState.startRequested;
-  inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
+  const role = process.env.SERVICE_ROLE || 'monolith';
+  const isMonolith = process.env.START_MONOLITH === 'true' || role === 'monolith';
+  const isCharger = role === 'charger';
+  const isDashboard = role === 'dashboard';
+
+  // Fields owned by the Charger Service (Telemetry)
+  if (isMonolith || isCharger) {
+    inverterData.carChargePower = Math.max(0, chargerState.powerW);
+    inverterData.chargerConnected = chargerState.connected;
+    inverterData.chargerCableConnected = chargerState.cableConnected;
+    inverterData.chargerStatus = chargerState.status;
+    inverterData.chargePointId = chargerState.chargePointId;
+    inverterData.chargerLastUpdate = chargerState.lastUpdate;
+    inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
+  }
+  
+  // Fields owned by the Dashboard (User Commands)
+  if (isMonolith || isDashboard) {
+    inverterData.chargingMode = chargerState.chargingMode;
+    inverterData.chargerStartRequested = chargerState.startRequested;
+  }
 }
 
 function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined {
