@@ -1,0 +1,7 @@
+{"time":"2026-05-10T09:22:38.936Z","level":"info","source":"lifecycle","message":"Server started. Session log: 2026-05-10T09-22-38Z.jsonl"}
+{"time":"2026-05-10T09:22:38.940Z","level":"info","source":"server","message":"🚀 Starting Charger Service (OCPP)..."}
+{"time":"2026-05-10T09:22:38.942Z","level":"info","source":"server","message":"OCPP server listening on ws://0.0.0.0:9100/ocpp/<chargePointId>"}
+{"time":"2026-05-10T09:22:38.998Z","level":"info","source":"lifecycle","message":"Server started. Session log: 2026-05-10T09-22-38Z.jsonl"}
+{"time":"2026-05-10T09:22:39.002Z","level":"info","source":"server","message":"🚀 Starting Inverter Service (Polling + History)..."}
+{"time":"2026-05-10T09:22:39.002Z","level":"info","source":"server","message":"[STATE] Restored charger state mode=FAST startRequested=false txId=none appliedLimitA=none lastRequestedLimitA=none savedAt=2026-05-10T09:19:40.268Z"}
+{"time":"2026-05-10T09:22:39.012Z","level":"info","source":"server","message":"Connected to Inverter via Modbus TCP (192.168.1.140:502)"}

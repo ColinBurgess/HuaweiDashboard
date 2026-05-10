@@ -1,0 +1,4 @@
+{"time":"2026-05-10T09:21:31.941Z","level":"info","source":"lifecycle","message":"Server started. Session log: 2026-05-10T09-21-31Z.jsonl"}
+{"time":"2026-05-10T09:21:31.944Z","level":"info","source":"server","message":"🚀 Starting Inverter Service (Polling + History)..."}
+{"time":"2026-05-10T09:21:31.945Z","level":"info","source":"server","message":"[STATE] Restored charger state mode=FAST startRequested=false txId=none appliedLimitA=none lastRequestedLimitA=none savedAt=2026-05-10T09:19:40.268Z"}
+{"time":"2026-05-10T09:21:31.955Z","level":"info","source":"server","message":"Connected to Inverter via Modbus TCP (192.168.1.140:502)"}

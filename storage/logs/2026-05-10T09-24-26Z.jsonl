@@ -1,0 +1,4 @@
+{"time":"2026-05-10T09:24:26.235Z","level":"info","source":"lifecycle","message":"Server started. Session log: 2026-05-10T09-24-26Z.jsonl"}
+{"time":"2026-05-10T09:24:26.240Z","level":"info","source":"server","message":"[INFO] Serving static files from: /app/dist"}
+{"time":"2026-05-10T09:24:26.239Z","level":"info","source":"server","message":"🚀 Starting Dashboard Service (API + UI)..."}
+{"time":"2026-05-10T09:24:26.241Z","level":"info","source":"server","message":"Server running on http://localhost:3001"}

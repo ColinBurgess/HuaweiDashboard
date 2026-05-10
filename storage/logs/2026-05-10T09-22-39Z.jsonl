@@ -1,0 +1,3 @@
+{"time":"2026-05-10T09:22:39.013Z","level":"info","source":"lifecycle","message":"Server started. Session log: 2026-05-10T09-22-39Z.jsonl"}
+{"time":"2026-05-10T09:22:39.017Z","level":"info","source":"server","message":"🚀 Starting Dashboard Service (API + UI)..."}
+{"time":"2026-05-10T09:22:39.019Z","level":"info","source":"server","message":"Server running on http://localhost:3001"}

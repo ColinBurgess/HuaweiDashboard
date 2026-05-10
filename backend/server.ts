@@ -25,6 +25,10 @@ const io = new Server(httpServer, {
   }
 });
 
+io.on('connection', (socket) => {
+  socket.emit('inverter-data', inverterData);
+});
+
 const PORT = Number(process.env.PORT ?? process.env.APP_PORT ?? 3001);
 const MODBUS_HOST = process.env.MODBUS_HOST ?? '192.168.1.140';
 const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '502,6607')
@@ -32,10 +36,16 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
   .map((port) => Number(port.trim()))
   .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
 const SLAVE_ID = 1;
-const HISTORY_DIR = path.resolve(__dirname, '../storage/history');
-const LOGS_DIR = path.resolve(__dirname, '../storage/logs');
-const DATA_DIR = path.resolve(__dirname, '../storage/data');
+const HISTORY_DIR = path.resolve(process.cwd(), 'storage/history');
+const LOGS_DIR = path.resolve(process.cwd(), 'storage/logs');
+const DATA_DIR = path.resolve(process.cwd(), 'storage/data');
+console.log(`[INIT] Storage Paths:
+  HISTORY: ${HISTORY_DIR}
+  LOGS:    ${LOGS_DIR}
+  DATA:    ${DATA_DIR}`);
 const CHARGER_STATE_FILE = path.resolve(DATA_DIR, 'charger-state.json');
+const LIVE_STATE_FILE = path.resolve(DATA_DIR, 'live-state.json');
+const STATE_FILE = LIVE_STATE_FILE; // For backward compatibility
 const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
 
@@ -497,6 +507,9 @@ function emitCombinedData() {
   syncChargerIntoInverterData();
   persistChargerStateIfChanged();
   io.emit('inverter-data', inverterData);
+  if (process.env.SERVICE_ROLE === 'dashboard') {
+    console.log(`[WS] Emitted inverter-data at ${new Date().toISOString()}`);
+  }
 }
 
 function extractChargePointId(pathValue: string): string {
@@ -1311,81 +1324,45 @@ async function pollInverter() {
   }
 
   try {
-    const pvRes = await client.readHoldingRegisters(32016, 10);
-    const pvVals = pvRes.response.body.values;
-    inverterData.pv1Voltage = pvVals[0] / 10;
-    inverterData.pv1Current = pvVals[1] / 100;
-    inverterData.pv2Voltage = pvVals[2] / 10;
-    inverterData.pv2Current = pvVals[3] / 100;
+    // BLOQUE 1: Datos de operación (32016 - 32116)
+    // Cubre: PV, Potencia Entrada, Voltaje Red, Frecuencia, Potencia Activa, Temperatura, Estado, Rendimiento
+    const block1Res = await client.readHoldingRegisters(32016, 100);
+    const regs1 = block1Res.response.body.values;
+    
+    // Mapeo manual basado en offsets desde 32016
+    inverterData.pv1Voltage = regs1[32016 - 32016] / 10;
+    inverterData.pv1Current = regs1[32017 - 32016] / 100;
+    inverterData.pv2Voltage = regs1[32018 - 32016] / 10;
+    inverterData.pv2Current = regs1[32019 - 32016] / 100;
     sectionReadStatus.pv = true;
-  } catch (err) {
-    console.warn('Modbus read failed (PV block):', err);
-  }
 
-  await delay(60);
-
-  try {
-    const powerRes = await client.readHoldingRegisters(32064, 2);
-    inverterData.inputPower = i32FromRegs(powerRes.response.body.values);
+    inverterData.inputPower = i32FromRegs([regs1[32064 - 32016], regs1[32065 - 32016]]);
     sectionReadStatus.inputPower = true;
-  } catch (err) {
-    console.warn('Modbus read failed (input power):', err);
-  }
 
-  try {
-    const activePowerRes = await client.readHoldingRegisters(32080, 2);
-    inverterData.activePower = i32FromRegs(activePowerRes.response.body.values);
+    inverterData.gridVoltage = regs1[32066 - 32016] / 10;
+    inverterData.gridFrequency = regs1[32069 - 32016] / 100;
+
+    inverterData.activePower = i32FromRegs([regs1[32080 - 32016], regs1[32081 - 32016]]);
     sectionReadStatus.activePower = true;
+
+    inverterData.temperature = regs1[32087 - 32016] / 10;
+    inverterData.status = regs1[32089 - 32016];
+
+    inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
   } catch (err) {
-    console.warn('Modbus read failed (active power):', err);
+    console.warn('Modbus read failed (Operation Block):', err);
   }
 
   await delay(60);
 
   try {
-    const tempStatusRes = await client.readHoldingRegisters(32087, 3);
-    inverterData.temperature = tempStatusRes.response.body.values[0] / 10;
-    inverterData.status = tempStatusRes.response.body.values[2];
-    sectionReadStatus.tempStatus = true;
-  } catch (err) {
-    console.warn('Modbus read failed (temperature/status):', err);
-  }
-
-  try {
-    const yieldRes = await client.readHoldingRegisters(32106, 2);
-    inverterData.dailyYield = u32FromRegs(yieldRes.response.body.values) / 100;
-
-    await delay(60);
-
-    const totalYieldRes = await client.readHoldingRegisters(32114, 2);
-    inverterData.totalYield = u32FromRegs(totalYieldRes.response.body.values) / 100;
-    sectionReadStatus.yields = true;
-  } catch (err) {
-    console.warn('Modbus read failed (yield counters):', err);
-  }
-
-  await delay(60);
-
-  try {
-    const gridRes = await client.readHoldingRegisters(32066, 4);
-    inverterData.gridVoltage = gridRes.response.body.values[0] / 10;
-    inverterData.gridFrequency = gridRes.response.body.values[3] / 100;
-    sectionReadStatus.grid = true;
-  } catch (err) {
-    console.warn('Modbus read failed (grid voltage/frequency):', err);
-  }
-
-  await delay(60);
-
-  try {
+    // BLOQUE 2: Contador de Red (37113)
     const meterRes = await client.readHoldingRegisters(37113, 2);
     inverterData.gridPower = i32FromRegs(meterRes.response.body.values);
     sectionReadStatus.gridMeter = true;
   } catch (err) {
-    console.warn('Modbus read failed (grid power meter):', err);
+    console.warn('Modbus read failed (Grid Meter):', err);
   }
-
-  await delay(60);
 
   if (MODBUS_HAS_BATTERY) {
     await delay(60);
@@ -1396,7 +1373,7 @@ async function pollInverter() {
       inverterData.batterySOC = battSocRes.response.body.values[0] / 10;
       sectionReadStatus.battery = true;
     } catch (err) {
-      console.warn('Modbus read failed (battery block):', err);
+      console.warn('Modbus read failed (Battery Block):', err);
       inverterData.batteryPower = 0;
       inverterData.batterySOC = 0;
     }
@@ -1737,7 +1714,7 @@ export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
   restorePersistedChargerState(); // Needs this for syncing
   connectModbus();
-  setInterval(pollInverter, 5000);
+  setInterval(pollInverter, 1000);
 }
 
 export async function startChargerService() {
@@ -1756,7 +1733,6 @@ export async function startDashboardService() {
 }
 
 // Inter-process state sharing (for modular mode)
-const STATE_FILE = path.join(DATA_DIR, 'live-state.json');
 
 function saveLiveState() {
   try {
@@ -1768,12 +1744,13 @@ function saveLiveState() {
 
 function loadLiveState() {
   try {
-    if (fs.existsSync(STATE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (fs.existsSync(LIVE_STATE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(LIVE_STATE_FILE, 'utf8'));
       Object.assign(inverterData, data);
+      emitCombinedData();
     }
   } catch (err) {
-    // Ignore read errors
+    console.error(`[ERROR] loadLiveState failed:`, err);
   }
 }
 
@@ -1801,7 +1778,8 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(__dirname, '../dist');
+    const distPath = process.env.DIST_PATH || path.resolve(process.cwd(), 'dist');
+    console.log(`[INFO] Serving static files from: ${distPath}`);
     if (!fs.existsSync(distPath)) {
       console.warn(`[WARN] Production directory not found at ${distPath}. Did you run 'npm run build'?`);
     }
@@ -1925,6 +1903,6 @@ if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts
 
 // If running as Dashboard in modular mode, we need to poll the state file
 if (process.env.SERVICE_ROLE === 'dashboard') {
-  setInterval(loadLiveState, 2000);
+  setInterval(loadLiveState, 1000);
 }
 
