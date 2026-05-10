@@ -42,6 +42,7 @@ services:
       - INFLUX_TOKEN=my-super-secret-token
       - INFLUX_ORG=huawei-dashboard
       - INFLUX_BUCKET=telemetry
+      - START_MONOLITH=true
 
   # --- MODO MODULAR (Microservicios) ---
   inverter-collector:

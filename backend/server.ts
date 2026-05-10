@@ -1769,13 +1769,15 @@ function loadLiveState() {
   }
 }
 
-// Update the pollInverter to save state if running in collector mode
-const originalPollInverter = pollInverter;
-// @ts-ignore
-pollInverter = async () => {
-  await originalPollInverter();
-  saveLiveState();
-};
+// Setup the pollInverter to save state if running in collector mode
+export function setupStateSharing() {
+  const originalPollInverter = pollInverter;
+  // @ts-ignore
+  pollInverter = async () => {
+    await originalPollInverter();
+    saveLiveState();
+  };
+}
 
 async function startServer() {
   // Vite middleware for development
@@ -1901,7 +1903,7 @@ async function calculateStatsForDate(date: string) {
 }
 
 // Auto-start if run directly (Monolith mode)
-if (process.argv[1].endsWith('server.ts')) {
+if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js')) {
   console.log('🏛 Running in MONOLITH mode...');
   restorePersistedChargerState();
   syncChargerIntoInverterData();
