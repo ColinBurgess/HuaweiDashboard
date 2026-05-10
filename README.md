@@ -24,6 +24,8 @@
 *   **🔋 Control Inteligente EV**: Modos `FAST`, `GREEN` (100% solar) y `HYBRID`.
 *   **📊 Estadísticas Avanzadas**: Cálculo de kWh y balance energético estilo FusionSolar.
 *   **📦 Arquitectura Modular**: Desacoplado en microservicios mediante Docker.
+*   **🏥 System Health Monitor**: Panel de salud en tiempo real para supervisar cada servicio.
+*   **📜 Logs Unificados**: Stream centralizado de logs de todos los servicios con origen identificado.
 *   **🛡️ Persistencia Robusta**: Histórico, logs y estados protegidos ante reinicios.
 
 ## Arquitectura Modular
@@ -35,20 +37,27 @@ El proyecto ha evolucionado de un monolito a una arquitectura desacoplada que pu
 - **Charger Service**: Servidor OCPP 1.6 independiente.
 - **Dashboard UI**: Interfaz web (React) y API de consulta.
 
+### Comunicación Inter-procesos (IPC)
+Los servicios se comunican mediante un **archivo de estado compartido** (`storage/data/live-state.json`). Cada proceso carga este archivo periódicamente, actualiza su sección de responsabilidad (latidos, telemetría o estado del cargador) y guarda el resultado. Este mecanismo garantiza que el sistema sea resiliente y no dependa de bases de datos externas para la coordinación básica.
+
 ## Capacidades principales
 
 - Monitorización en tiempo real de producción solar, red, batería, temperatura y consumo doméstico.
 - Visualización del flujo energético y gráfico de potencia vs consumo.
 - **Módulo de Estadísticas**: Balance energético detallado (kWh) con gráficos de donuts estilo FusionSolar (Producción vs Consumo).
-- Histórico diario persistente en `history/YYYY-MM-DD.jsonl`.
-- Logs de sesión persistentes en `logs/YYYY-MM-DDTHH-MM-SSZ.jsonl`.
-- Persistencia de estado del cargador en `data/charger-state.json`.
+- **System Health Monitor**: Visualización del estado de salud, latidos (heartbeats) y detalles operativos de cada servicio modular desde el propio Dashboard.
+- **Unified Log Stream**: Los logs de todos los procesos se centralizan en la UI, diferenciados por colores y etiquetas de origen (`charger`, `collector`, `dashboard`).
+- Histórico diario persistente en `storage/history/YYYY-MM-DD.jsonl`.
+- Logs de sesión persistentes en `storage/logs/YYYY-MM-DDTHH-MM-SSZ.jsonl`.
+- Registro combinado de logs en tiempo real en `storage/logs/combined.jsonl`.
+- Persistencia de estado del cargador en `storage/data/charger-state.json`.
 - Control EV con modos FAST, GREEN y HYBRID.
 - Reconciliación automática tras reinicios o reconexiones OCPP.
 - Protección anti-loop ante `StopTransaction(reason=Other)` repetidos.
 - Soporte de límites OCPP tanto en amperios como en vatios según lo que soporte el cargador.
 - Precarga en la UI del histórico del día actual para que la vista Live no parezca vacía tras reiniciar.
 - Manejo endurecido de reconexiones OCPP para evitar que sockets obsoletos desarmen el control inteligente.
+- **Contexto para IA**: Archivo `Agents.md` con guía de arquitectura para facilitar la transferencia entre sesiones de asistentes AI.
 - **Seguridad en Despliegue**: Verificación automática de tipos (Lint/TypeScript) antes de cada build de Docker.
 
 ## Requisitos previos
@@ -352,6 +361,7 @@ Los últimos 250 logs se mantienen en memoria y además se emiten en tiempo real
 ## Estructura actual del proyecto
 
 ```text
+Agents.md            Guía de contexto para asistentes de IA (Arquitectura/IPC/Roles)
 server.ts            Núcleo del sistema: Lógica compartida, API y Monolito
 services/            Entry points para modo modular (inverter, charger, dashboard)
 ocpp_server.ts       Script auxiliar relacionado con OCPP
@@ -363,9 +373,10 @@ src/
   main.tsx           Entrada del frontend
   index.css          Estilos globales (Premium Dark Mode)
   lib/utils.ts       Utilidades frontend
-history/             Histórico diario JSONL
-logs/                Logs de sesión JSONL
-data/                Estado persistido y Live State compartido
+storage/
+  history/           Histórico diario JSONL
+  logs/              Logs de sesión y combined.jsonl
+  data/              Estado persistido y Live State compartido (IPC)
 dist/                Bundle frontend generado por Vite
 Dockerfile           Build multietapa con verificación de tipos
 docker-compose.yml   Orquestación con soporte de perfiles
