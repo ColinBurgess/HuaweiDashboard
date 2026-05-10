@@ -357,7 +357,7 @@ function persistChargerStateIfChanged(force = false): void {
   }
 }
 
-function restorePersistedChargerState(): void {
+export function restorePersistedChargerState(): void {
   if (!fs.existsSync(CHARGER_STATE_FILE)) {
     console.log('[STATE] No persisted charger state file found, starting with defaults');
     return;
@@ -523,10 +523,25 @@ function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined 
 }
 
 function emitCombinedData() {
-  syncChargerIntoInverterData();
-  persistChargerStateIfChanged();
+  const isMonolith = process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js');
+  const isCharger = process.env.SERVICE_ROLE === 'charger';
+  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+  const isCollector = process.env.SERVICE_ROLE === 'collector';
+
+  // Only the owner of the charger state should sync it into the shared object
+  if (isMonolith || isCharger) {
+    syncChargerIntoInverterData();
+    persistChargerStateIfChanged();
+  }
+
   io.emit('inverter-data', inverterData);
-  if (process.env.SERVICE_ROLE === 'dashboard') {
+  
+  // If we are a data producer, save our updates to the shared live state
+  if (!isMonolith && !isDashboard && (isCharger || isCollector)) {
+    saveLiveState();
+  }
+
+  if (isDashboard) {
     console.log(`[WS] Emitted inverter-data at ${new Date().toISOString()}`);
   }
 }
@@ -1687,9 +1702,8 @@ app.post('/api/charger/probe-smart', (req, res) => {
   });
 });
 
-setInterval(() => {
-  applySmartChargingPolicy();
-}, GREEN_CONTROL_LOOP_MS);
+// The smart loop is now started within startChargerService to ensure 
+// it only runs where the charger connection exists.
 
 app.get('/api/logs/live', (req, res) => {
   res.json(liveLogs);
@@ -1731,13 +1745,33 @@ app.get('/api/logs/:date', (req, res) => {
 // Export functions for modular services
 export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
-  restorePersistedChargerState(); // Needs this for syncing
+  
+  // In modular mode, we need to sync with other services (like the charger)
+  if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
+    console.log('[INIT] Modular mode detected, starting live-state polling for inverter service');
+    setInterval(loadLiveState, 1000);
+  }
+
+  restorePersistedChargerState(); 
   connectModbus();
   setInterval(pollInverter, 1000);
 }
 
 export async function startChargerService() {
   console.log('🚀 Starting Charger Service (OCPP)...');
+  
+  // In modular mode, we need to restore state and sync with the inverter service
+  if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
+    console.log('[INIT] Modular mode detected, restoring charger state and starting live-state polling');
+    restorePersistedChargerState();
+    setInterval(loadLiveState, 1000);
+  }
+
+  // Start the smart charging loop here
+  setInterval(() => {
+    applySmartChargingPolicy();
+  }, GREEN_CONTROL_LOOP_MS);
+
   ocppHttpServer.on('error', (error) => {
     console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
   });
@@ -1753,15 +1787,17 @@ export async function startDashboardService() {
 
 // Inter-process state sharing (for modular mode)
 
-function saveLiveState() {
+export function saveLiveState() {
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(inverterData));
+    const tmpFile = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(inverterData));
+    fs.renameSync(tmpFile, STATE_FILE);
   } catch (err) {
     // Ignore write errors
   }
 }
 
-function loadLiveState() {
+export function loadLiveState() {
   try {
     if (fs.existsSync(LIVE_STATE_FILE)) {
       const data = JSON.parse(fs.readFileSync(LIVE_STATE_FILE, 'utf8'));
