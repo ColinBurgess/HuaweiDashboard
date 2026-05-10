@@ -1791,7 +1791,9 @@ app.post('/api/charger/start', (req, res) => {
   chargerState.lastUpdate = new Date().toISOString();
 
   if (isDashboard) {
+    syncChargerIntoInverterData();
     saveLiveState();
+    console.log(`[API] Charger START requested (Armed in shared state)`);
     res.json({ status: 'armed', mode: chargerState.chargingMode });
     return;
   }
@@ -1831,7 +1833,9 @@ app.post('/api/charger/stop', (req, res) => {
   chargerState.lastRequestedCurrentLimitA = undefined;
   
   if (isDashboard) {
+    syncChargerIntoInverterData();
     saveLiveState();
+    console.log(`[API] Charger STOP requested (Armed in shared state)`);
     res.json({ status: 'sent' });
     return;
   }
