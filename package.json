@@ -13,10 +13,12 @@
     "lint": "tsc --noEmit",
     "service:inverter": "NODE_ENV=production tsx backend/services/inverter.ts",
     "service:charger": "NODE_ENV=production tsx backend/services/charger.ts",
-    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/services/dashboard.ts"
+    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/services/dashboard.ts",
+    "migrate:history": "tsx backend/scripts/migrate_history.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@influxdata/influxdb-client": "^1.35.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.4",

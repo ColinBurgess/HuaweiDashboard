@@ -8,6 +8,7 @@ import net from 'net';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
+import { InfluxDB, Point } from '@influxdata/influxdb-client';
 
 // @ts-ignore
 import { client as ModbusClient } from 'jsmodbus';
@@ -37,6 +38,15 @@ const DATA_DIR = path.resolve(__dirname, '../storage/data');
 const CHARGER_STATE_FILE = path.resolve(DATA_DIR, 'charger-state.json');
 const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
+
+// InfluxDB Config
+const INFLUX_URL = process.env.INFLUX_URL || 'http://localhost:8086';
+const INFLUX_TOKEN = process.env.INFLUX_TOKEN || '';
+const INFLUX_ORG = process.env.INFLUX_ORG || 'huawei-dashboard';
+const INFLUX_BUCKET = process.env.INFLUX_BUCKET || 'telemetry';
+
+const influxClient = INFLUX_TOKEN ? new InfluxDB({ url: INFLUX_URL, token: INFLUX_TOKEN }) : null;
+const influxWriteApi = influxClient ? influxClient.getWriteApi(INFLUX_ORG, INFLUX_BUCKET, 'ms') : null;
 
 const OCPP_HOST = process.env.OCPP_HOST ?? '0.0.0.0';
 const OCPP_PORT = Number(process.env.OCPP_PORT ?? 9100);
@@ -207,6 +217,11 @@ function handleShutdown(signal: NodeJS.Signals) {
   isShuttingDown = true;
   recordLifecycleLog(`Server stopping (${signal})`, 'warn', true);
   originalConsole.warn(`Server stopping (${signal})`);
+  
+  if (influxWriteApi) {
+    influxWriteApi.close().catch(e => originalConsole.error('Error closing InfluxDB Write API:', e));
+  }
+  
   process.exit(0);
 }
 
@@ -362,6 +377,34 @@ const STOP_OTHER_COOLDOWN_THRESHOLD = 3;       // after this many consecutive re
 const STOP_OTHER_COOLDOWN_MS       = 60_000;   // ...wait this long before re-arming (ms)
 let consecutiveStopReasonOtherCount = 0;
 let stopReasonOtherCooldownUntil   = 0;        // epoch ms, re-arm blocked until this time
+
+function writeToInflux(data: any) {
+  if (!influxWriteApi) return;
+
+  try {
+    const point = new Point('telemetry')
+      .tag('model', data.model)
+      .tag('serial', data.serialNumber)
+      .floatField('activePower', data.activePower)
+      .floatField('inputPower', data.inputPower)
+      .floatField('houseLoad', data.houseLoad)
+      .floatField('gridPower', data.gridPower)
+      .floatField('batteryPower', data.batteryPower)
+      .floatField('batterySOC', data.batterySOC)
+      .floatField('pv1Voltage', data.pv1Voltage)
+      .floatField('pv1Current', data.pv1Current)
+      .floatField('pv2Voltage', data.pv2Voltage)
+      .floatField('pv2Current', data.pv2Current)
+      .floatField('consumption', data.consumption)
+      .floatField('temperature', data.temperature);
+
+    influxWriteApi.writePoint(point);
+    // No hace falta hacer flush cada vez, la librería lo hace en batches automáticamente
+  } catch (error) {
+    originalConsole.error('Error writing to InfluxDB:', error);
+  }
+}
+
 
 let inverterData = {
   model: 'Unknown',
@@ -1373,6 +1416,9 @@ async function pollInverter() {
       console.error('Error saving to history:', err);
     }
   });
+
+  // Persist to InfluxDB
+  writeToInflux(inverterData);
 }
 
 
