@@ -20,6 +20,13 @@ RUN npm run lint
 # Construir el frontend para producción (genera la carpeta dist/)
 RUN npm run build
 
+# Crear directorios de almacenamiento y asegurar permisos para el usuario 'node'
+RUN mkdir -p storage/data storage/history storage/logs && \
+    chown -R node:node /app
+
+# Cambiar al usuario no-root
+USER node
+
 # Exponer los puertos del dashboard y del servidor OCPP
 EXPOSE 3001 9100
 
