@@ -1,12 +1,30 @@
-# Huawei SUN2000 Inverter Dashboard
+# ☀️ Huawei SUN2000 & EV Dashboard 🚗
 
-Dashboard residencial para monitorizar un inversor Huawei SUN2000 y controlar un cargador EV vía OCPP 1.6 desde una única aplicación Node.js + React.
+![Dashboard Banner](./frontend/assets/banner_readme.png)
 
-El proyecto combina tres funciones principales:
+<div align="center">
 
-- Telemetría en tiempo real del inversor vía Modbus TCP.
-- Control inteligente del cargador EV con modos FAST, GREEN y HYBRID.
-- Persistencia local de histórico, logs y estado del cargador entre reinicios.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Docker Support](https://img.shields.io/badge/Docker-Supported-blue)](https://www.docker.com/)
+[![React 19](https://img.shields.io/badge/React-19-cyan)](https://react.dev/)
+[![Tailwind 4](https://img.shields.io/badge/Tailwind-4-blueviolet)](https://tailwindcss.com/)
+
+**Dashboard residencial premium para monitorizar inversores Huawei SUN2000 y controlar cargadores EV vía OCPP 1.6.**
+
+[Report Bug](https://github.com/ColinBurgess/HuaweiDashboard/issues) · [Request Feature](https://github.com/ColinBurgess/HuaweiDashboard/issues)
+
+</div>
+
+---
+
+### 🚀 Funciones Principales
+
+*   **⚡ Telemetría en tiempo real**: Monitorización del inversor vía Modbus TCP.
+*   **🔋 Control Inteligente EV**: Modos `FAST`, `GREEN` (100% solar) y `HYBRID`.
+*   **📊 Estadísticas Avanzadas**: Cálculo de kWh y balance energético estilo FusionSolar.
+*   **📦 Arquitectura Modular**: Desacoplado en microservicios mediante Docker.
+*   **🛡️ Persistencia Robusta**: Histórico, logs y estados protegidos ante reinicios.
 
 ## Arquitectura Modular
 
@@ -365,11 +383,14 @@ docker-compose.yml   Orquestación con soporte de perfiles
 | `npm run clean` | Borra `dist/` |
 | `npm run preview` | Preview del build frontend |
 
-## Tecnologías
+## 🛠️ Tecnologías Utilizadas
 
-- Frontend: React 19, Vite, Recharts, Lucide React, Socket.io client.
-- Backend: Node.js, Express, Socket.io, ws, JSModbus.
-- Tooling: TypeScript, tsx, Tailwind CSS 4.
+| Categoría | Tecnologías |
+|---|---|
+| **Frontend** | React 19, Vite, Recharts, Framer Motion, Tailwind CSS 4 |
+| **Backend** | Node.js, Express, Socket.io, ws, JSModbus |
+| **Infraestructura** | Docker, Docker Compose |
+| **Lenguaje** | TypeScript |
 
 ## Observaciones
 
