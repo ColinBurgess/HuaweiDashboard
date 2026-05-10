@@ -1959,32 +1959,7 @@ export async function startDashboardService() {
   await startServer();
 }
 
-// Inter-process state sharing (for modular mode)
 
-export function saveLiveState() {
-  try {
-    const tmpFile = `${STATE_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(inverterData));
-    fs.renameSync(tmpFile, STATE_FILE);
-  } catch (err) {
-    // Ignore write errors
-  }
-}
-
-  } catch (error) {
-    console.error(`[ERROR] loadLiveState failed:`, error);
-  }
-}
-
-// Setup the pollInverter to save state if running in collector mode
-export function setupStateSharing() {
-  const originalPollInverter = pollInverter;
-  // @ts-ignore
-  pollInverter = async () => {
-    await originalPollInverter();
-    saveLiveState();
-  };
-}
 
 async function startServer() {
   // Vite middleware for development
@@ -2231,9 +2206,4 @@ if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts
   startInverterService();
   startChargerService();
   startDashboardService();
-}
-
-// If running as Dashboard in modular mode, we need to poll the state file
-if (process.env.SERVICE_ROLE === 'dashboard') {
-  setInterval(loadLiveState, 1000);
 }
