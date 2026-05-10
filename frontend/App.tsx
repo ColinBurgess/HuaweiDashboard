@@ -1353,9 +1353,10 @@ export default function App() {
             </div>
 
             <div className="flex-1 rounded-2xl border border-white/10 bg-black/40 overflow-hidden flex flex-col">
-              <div className="grid grid-cols-[100px_80px_1fr] px-6 py-3 border-b border-white/10 bg-white/5 text-[10px] uppercase tracking-widest text-gray-500 font-bold">
+              <div className="grid grid-cols-[100px_80px_110px_1fr] px-6 py-3 border-b border-white/10 bg-white/5 text-[10px] uppercase tracking-widest text-gray-500 font-bold">
                 <span>Time</span>
                 <span>Level</span>
+                <span>Source</span>
                 <span>Message</span>
               </div>
               <div className="flex-1 overflow-auto p-2 scrollbar-thin scrollbar-thumb-white/10">
@@ -1367,7 +1368,7 @@ export default function App() {
                   liveLogs.slice().reverse().map((entry, index) => (
                     <div 
                       key={`${entry.time}-${index}`} 
-                      className="grid grid-cols-[100px_80px_1fr] px-4 py-2.5 hover:bg-white/[0.02] border-b border-white/5 last:border-b-0 transition-colors group"
+                      className="grid grid-cols-[100px_80px_110px_1fr] px-4 py-2.5 hover:bg-white/[0.02] border-b border-white/5 last:border-b-0 transition-colors group"
                     >
                       <span className="text-[11px] font-mono text-gray-500 group-hover:text-gray-400">
                         {new Date(entry.time).toLocaleTimeString([], { hour12: false })}
@@ -1379,6 +1380,16 @@ export default function App() {
                         entry.level === 'info' && 'text-cyan-400',
                       )}>
                         {entry.level}
+                      </span>
+                      <span className={cn(
+                        'text-[10px] font-bold uppercase tracking-wider',
+                        entry.source.startsWith('charger') && 'text-purple-400',
+                        entry.source.startsWith('collector') && 'text-orange-400',
+                        entry.source.startsWith('dashboard') && 'text-blue-400',
+                        (entry.source === 'lifecycle' || entry.source.includes('lifecycle')) && 'text-gray-400',
+                        !['charger', 'collector', 'dashboard'].some(s => entry.source.startsWith(s)) && !entry.source.includes('lifecycle') && 'text-gray-500'
+                      )}>
+                        {entry.source.split('/')[0]}
                       </span>
                       <div className="text-xs text-gray-300 break-words whitespace-pre-wrap font-mono leading-relaxed">
                         {entry.message}

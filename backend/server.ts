@@ -126,6 +126,8 @@ function formatLogSessionTimestamp(date: Date): string {
 
 const RUNTIME_LOG_FILE = path.join(LOGS_DIR, `${formatLogSessionTimestamp(SERVER_START_TIME)}.jsonl`);
 
+const COMBINED_LOG_FILE = path.join(LOGS_DIR, 'combined.jsonl');
+
 function stringifyLogArg(arg: unknown): string {
   if (arg instanceof Error) {
     return arg.stack ?? arg.message;
@@ -157,17 +159,24 @@ function storeLiveLog(entry: RuntimeLogEntry) {
 
 function appendRuntimeLog(entry: RuntimeLogEntry, sync = false) {
   const serializedEntry = `${JSON.stringify(entry)}\n`;
+  const targets = [RUNTIME_LOG_FILE, COMBINED_LOG_FILE];
 
-  if (sync) {
-    fs.appendFileSync(RUNTIME_LOG_FILE, serializedEntry);
-    return;
-  }
-
-  fs.appendFile(RUNTIME_LOG_FILE, serializedEntry, (err) => {
-    if (err) {
-      originalConsole.error('Error saving runtime log:', err);
+  for (const target of targets) {
+    if (sync) {
+      try {
+        fs.appendFileSync(target, serializedEntry);
+      } catch (err) {
+        originalConsole.error(`Error saving runtime log to ${target}:`, err);
+      }
+      continue;
     }
-  });
+
+    fs.appendFile(target, serializedEntry, (err) => {
+      if (err) {
+        originalConsole.error(`Error saving runtime log to ${target}:`, err);
+      }
+    });
+  }
 }
 
 function persistRuntimeLog(level: RuntimeLogLevel, source: string, args: unknown[]) {
@@ -183,7 +192,7 @@ function persistRuntimeLog(level: RuntimeLogLevel, source: string, args: unknown
   const entry: RuntimeLogEntry = {
     time: new Date().toISOString(),
     level,
-    source,
+    source: process.env.SERVICE_ROLE || source,
     message,
   };
 
@@ -195,7 +204,7 @@ function recordLifecycleLog(message: string, level: RuntimeLogLevel = 'info', sy
   const entry: RuntimeLogEntry = {
     time: new Date().toISOString(),
     level,
-    source: 'lifecycle',
+    source: process.env.SERVICE_ROLE ? `${process.env.SERVICE_ROLE}/lifecycle` : 'lifecycle',
     message,
   };
 
@@ -217,6 +226,55 @@ console.error = (...args: unknown[]) => {
   originalConsole.error(...args);
   persistRuntimeLog('error', 'server', args);
 };
+
+function startLogWatcher() {
+  if (process.env.SERVICE_ROLE !== 'dashboard') return;
+  
+  originalConsole.log('[LOG] Starting unified log watcher...');
+  
+  let lastSize = 0;
+  if (fs.existsSync(COMBINED_LOG_FILE)) {
+    lastSize = fs.statSync(COMBINED_LOG_FILE).size;
+  }
+
+  setInterval(() => {
+    if (!fs.existsSync(COMBINED_LOG_FILE)) return;
+    
+    try {
+      const stats = fs.statSync(COMBINED_LOG_FILE);
+      if (stats.size > lastSize) {
+        const stream = fs.createReadStream(COMBINED_LOG_FILE, { start: lastSize });
+        let remainder = '';
+        
+        stream.on('data', (chunk) => {
+          const lines = (remainder + chunk.toString()).split('\n');
+          remainder = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const entry = JSON.parse(line);
+              // Avoid duplicate logs from the dashboard itself as it already emits them in persistRuntimeLog
+              if (!entry.source.startsWith('dashboard')) {
+                storeLiveLog(entry);
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        });
+        
+        stream.on('end', () => {
+          lastSize = stats.size;
+        });
+      } else if (stats.size < lastSize) {
+        lastSize = stats.size;
+      }
+    } catch (err) {
+      // Ignore errors (e.g. file busy)
+    }
+  }, 1000);
+}
 
 let isShuttingDown = false;
 
@@ -1741,6 +1799,20 @@ app.get('/api/logs/:date', (req, res) => {
       res.status(500).json({ error: 'Failed to calculate stats' });
     }
   });
+
+  app.get('/api/history/list', (req, res) => {
+    try {
+      const files = fs.readdirSync(HISTORY_DIR)
+        .filter(f => f.endsWith('.jsonl'))
+        .map(f => f.replace('.jsonl', ''))
+        .sort((a, b) => b.localeCompare(a));
+      res.json(files);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to list history' });
+    }
+  });
+
+  startLogWatcher();
 
 // Export functions for modular services
 export async function startInverterService() {
