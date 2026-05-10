@@ -288,6 +288,10 @@ type PersistedChargerState = {
   appliedCurrentLimitA: number | null;
   lastRequestedCurrentLimitA: number | null;
   transactionId: number | null;
+  connected: boolean;
+  cableConnected: boolean;
+  status: string;
+  powerW: number;
   savedAt: string;
 };
 
@@ -318,6 +322,10 @@ function buildChargerStateSignature(): string {
     appliedCurrentLimitA: chargerState.appliedCurrentLimitA ?? null,
     lastRequestedCurrentLimitA: chargerState.lastRequestedCurrentLimitA ?? null,
     transactionId: chargerState.transactionId ?? null,
+    connected: chargerState.connected,
+    cableConnected: chargerState.cableConnected,
+    status: chargerState.status,
+    powerW: chargerState.powerW,
   });
 }
 
@@ -334,6 +342,10 @@ function persistChargerStateIfChanged(force = false): void {
       appliedCurrentLimitA: chargerState.appliedCurrentLimitA ?? null,
       lastRequestedCurrentLimitA: chargerState.lastRequestedCurrentLimitA ?? null,
       transactionId: chargerState.transactionId ?? null,
+      connected: chargerState.connected,
+      cableConnected: chargerState.cableConnected,
+      status: chargerState.status,
+      powerW: chargerState.powerW,
       savedAt: new Date().toISOString(),
     };
 
@@ -370,6 +382,13 @@ function restorePersistedChargerState(): void {
     chargerState.transactionId = Number.isFinite(parsed.transactionId as number)
       ? Number(parsed.transactionId)
       : undefined;
+    
+    // Live fields
+    chargerState.connected = Boolean(parsed.connected);
+    chargerState.cableConnected = Boolean(parsed.cableConnected);
+    chargerState.status = String(parsed.status ?? 'Disconnected');
+    chargerState.powerW = Number(parsed.powerW ?? 0);
+    
     chargerState.lastUpdate = new Date().toISOString();
     lastPersistedChargerStateSignature = buildChargerStateSignature();
 
