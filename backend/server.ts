@@ -597,10 +597,13 @@ function emitCombinedData() {
   const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
   const isCollector = process.env.SERVICE_ROLE === 'collector';
 
-  // Only the owner of the charger state should sync it into the shared object
-  if (isMonolith || isCharger) {
+  // Sync charger data into the inverter object so the UI and states are consistent
+  // In modular mode, Dashboard needs to sync its own commands, and Charger needs to sync its telemetry.
+  if (isMonolith || isCharger || isDashboard) {
     syncChargerIntoInverterData();
-    persistChargerStateIfChanged();
+    if (isMonolith || isCharger) {
+      persistChargerStateIfChanged();
+    }
   }
 
   io.emit('inverter-data', inverterData);
@@ -635,14 +638,14 @@ function saveLiveState() {
     const ownedFields = SERVICE_OWNED_FIELDS[role] || [];
     const dataToSave: any = {};
     
-    // Only save fields this service "owns"
+    // Only save fields this service "owns" to avoid overwriting others with stale data
     ownedFields.forEach(field => {
       if ((inverterData as any)[field] !== undefined) {
         dataToSave[field] = (inverterData as any)[field];
       }
     });
 
-    // Always include this service's heartbeat in its own file
+    // Always include health heartbeat
     if (inverterData.services[role]) {
       dataToSave.services = { [role]: inverterData.services[role] };
     }
@@ -663,17 +666,44 @@ function loadLiveState() {
       if (file === `live-state-${role}.json`) continue;
 
       const filePath = path.join(DATA_DIR, file);
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      if (!fileContent) continue;
+      
+      let data;
+      try {
+        data = JSON.parse(fileContent);
+      } catch (e) {
+        continue; // Skip corrupt files
+      }
       
       if (data.services) {
         inverterData.services = { ...inverterData.services, ...data.services };
         delete data.services;
       }
 
+      // Detect if important commands (Mode or Start/Stop) changed before merging
+      const modeChanged = data.chargingMode && data.chargingMode !== inverterData.chargingMode;
+      const startChanged = data.chargerStartRequested !== undefined && data.chargerStartRequested !== inverterData.chargerStartRequested;
+
       Object.assign(inverterData, data);
+
+      // If we are the charger service and a user command changed, react immediately
+      if (modeChanged || startChanged) {
+        const isCharger = process.env.SERVICE_ROLE === 'charger';
+        const isMonolith = process.env.START_MONOLITH === 'true';
+        
+        if (isCharger || isMonolith) {
+          originalConsole.log(`[SYNC] Detected external command change: mode=${inverterData.chargingMode} start=${inverterData.chargerStartRequested}`);
+          // Sync to chargerState so reconciliation uses the new values
+          chargerState.chargingMode = inverterData.chargingMode;
+          chargerState.startRequested = inverterData.chargerStartRequested;
+          
+          reconcileChargerControlState('StateFileSync');
+        }
+      }
     }
 
-    // Sync back to chargerState
+    // Sync back to chargerState for general consistency
     chargerState.connected = inverterData.chargerConnected;
     chargerState.cableConnected = inverterData.chargerCableConnected;
     chargerState.status = inverterData.chargerStatus;
