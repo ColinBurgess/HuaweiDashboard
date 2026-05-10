@@ -1559,13 +1559,6 @@ ocppWss.on('connection', (ws, req) => {
   });
 });
 
-ocppHttpServer.on('error', (error) => {
-  console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
-});
-
-ocppHttpServer.listen(OCPP_PORT, OCPP_HOST, () => {
-  console.log(`OCPP server listening on ws://${OCPP_HOST}:${OCPP_PORT}${OCPP_PATH_PREFIX}/<chargePointId>`);
-});
 
 // REST API: charger control
 app.use(express.json());
@@ -1741,8 +1734,11 @@ export async function startInverterService() {
 
 export async function startChargerService() {
   console.log('🚀 Starting Charger Service (OCPP)...');
-  ocppHttpServer.listen(9100, '0.0.0.0', () => {
-    console.log('OCPP Server running on port 9100');
+  ocppHttpServer.on('error', (error) => {
+    console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
+  });
+  ocppHttpServer.listen(OCPP_PORT, OCPP_HOST, () => {
+    console.log(`OCPP server listening on ws://${OCPP_HOST}:${OCPP_PORT}${OCPP_PATH_PREFIX}/<chargePointId>`);
   });
 }
 
@@ -1910,14 +1906,11 @@ if (process.argv[1].endsWith('server.ts')) {
   restorePersistedChargerState();
   syncChargerIntoInverterData();
   persistChargerStateIfChanged(true);
-  connectModbus();
-  setInterval(pollInverter, 2000);
   
-  ocppHttpServer.listen(9100, '0.0.0.0', () => {
-    console.log('OCPP Server running on port 9100');
-  });
-  
-  startServer();
+  // Start all services
+  startInverterService();
+  startChargerService();
+  startDashboardService();
 }
 
 // If running as Dashboard in modular mode, we need to poll the state file
