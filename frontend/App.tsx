@@ -1110,8 +1110,7 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorPv1)"
-                    isAnimationActive={!isHistoricalView}
-                    animationDuration={isHistoricalView ? 0 : 300}
+                    isAnimationActive={false}
                   />
                   <Area
                     type="monotone"
@@ -1122,8 +1121,7 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorPv2)"
-                    isAnimationActive={!isHistoricalView}
-                    animationDuration={isHistoricalView ? 0 : 300}
+                    isAnimationActive={false}
                   />
                   <Area
                     type="monotone"
@@ -1133,8 +1131,7 @@ export default function App() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorCons)"
-                    isAnimationActive={!isHistoricalView}
-                    animationDuration={isHistoricalView ? 0 : 300}
+                    isAnimationActive={false}
                   />
                 </AreaChart>
               </ResponsiveContainer>
