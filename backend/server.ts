@@ -605,20 +605,49 @@ function emitCombinedData() {
 
   io.emit('inverter-data', inverterData);
   
-  // Each service saves its own part of the state to its own file to avoid clobbering others
   if (!isMonolith) {
     saveLiveState();
   }
 }
+
+// Map of fields each service is responsible for
+const SERVICE_OWNED_FIELDS: Record<string, string[]> = {
+  collector: [
+    'model', 'serialNumber', 'activePower', 'pv1Voltage', 'pv1Current', 
+    'pv2Voltage', 'pv2Current', 'inputPower', 'dailyYield', 'totalYield', 
+    'temperature', 'status', 'gridVoltage', 'gridFrequency', 'gridPower', 
+    'batteryPower', 'batterySOC', 'houseLoad', 'consumption', 'lastUpdate', 'connected'
+  ],
+  charger: [
+    'chargerConnected', 'chargerCableConnected', 'chargerStatus', 'carChargePower', 
+    'chargePointId', 'chargerLastUpdate', 'chargerCurrentLimitA'
+  ],
+  dashboard: [
+    'chargingMode', 'chargerStartRequested'
+  ]
+};
 
 function saveLiveState() {
   const role = process.env.SERVICE_ROLE || 'monolith';
   const targetFile = path.resolve(DATA_DIR, `live-state-${role}.json`);
   
   try {
-    // We only save fields this service is responsible for to minimize the file size and merge conflicts
-    // but for simplicity and robustness, we can save the whole object and let loadLiveState handle the merge.
-    fs.writeFileSync(targetFile, JSON.stringify(inverterData, null, 2));
+    const ownedFields = SERVICE_OWNED_FIELDS[role] || [];
+    const dataToSave: any = {};
+    
+    // Only save fields this service "owns"
+    ownedFields.forEach(field => {
+      if ((inverterData as any)[field] !== undefined) {
+        dataToSave[field] = (inverterData as any)[field];
+      }
+    });
+
+    // Always include this service's heartbeat in its own file
+    if (inverterData.services[role]) {
+      dataToSave.services = { [role]: inverterData.services[role] };
+    }
+
+    fs.writeFileSync(targetFile, JSON.stringify(dataToSave, null, 2));
   } catch (err) {
     originalConsole.error(`[ERROR] Failed to save live state for ${role}:`, err);
   }
@@ -627,22 +656,24 @@ function saveLiveState() {
 function loadLiveState() {
   try {
     const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('live-state-') && f.endsWith('.json'));
-    
+    const role = process.env.SERVICE_ROLE || 'monolith';
+
     for (const file of files) {
+      // Don't load our own file to avoid overwriting our live memory with stale disk data
+      if (file === `live-state-${role}.json`) continue;
+
       const filePath = path.join(DATA_DIR, file);
       const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       
-      // Special handling for services health to avoid clobbering
       if (data.services) {
         inverterData.services = { ...inverterData.services, ...data.services };
         delete data.services;
       }
 
-      // Merge the rest. The order of files might matter, but usually roles don't overlap in fields.
       Object.assign(inverterData, data);
     }
 
-    // Sync back to chargerState so the API and reconciliation logic see the same status
+    // Sync back to chargerState
     chargerState.connected = inverterData.chargerConnected;
     chargerState.cableConnected = inverterData.chargerCableConnected;
     chargerState.status = inverterData.chargerStatus;
@@ -654,7 +685,7 @@ function loadLiveState() {
 
     emitCombinedData();
   } catch (error) {
-    // It's okay if some files don't exist yet
+    // Files might not exist yet or be temporarily locked
   }
 }
 
