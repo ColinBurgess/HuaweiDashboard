@@ -1,3 +1,2 @@
-import { startInverterService, setupStateSharing } from '../server.js';
-setupStateSharing();
+import { startInverterService } from '../server.js';
 startInverterService();
