@@ -63,6 +63,7 @@ const OCPP_SMART_PROBE_TX_WATTS = Number(process.env.OCPP_SMART_PROBE_TX_WATTS ?
 const OCPP_SMART_PROBE_RATE_UNIT = String(process.env.OCPP_SMART_PROBE_RATE_UNIT ?? 'auto').toLowerCase();
 const MODBUS_RECONNECT_DELAY_MS = 10_000;
 const MODBUS_PORT_ROTATE_THRESHOLD = 3;
+const MODBUS_HAS_BATTERY = String(process.env.MODBUS_HAS_BATTERY ?? 'true').toLowerCase() !== 'false';
 const GREEN_CONTROL_LOOP_MS = 30_000;
 const GREEN_GRID_VOLTAGE = Number(process.env.GREEN_GRID_VOLTAGE ?? 230);
 const GREEN_MIN_CHARGING_AMPS = 6;
@@ -1380,14 +1381,23 @@ async function pollInverter() {
 
   await delay(60);
 
-  try {
-    const battPowerRes = await client.readHoldingRegisters(37001, 2);
-    inverterData.batteryPower = i32FromRegs(battPowerRes.response.body.values);
-    const battSocRes = await client.readHoldingRegisters(37004, 1);
-    inverterData.batterySOC = battSocRes.response.body.values[0] / 10;
+  if (MODBUS_HAS_BATTERY) {
+    await delay(60);
+    try {
+      const battPowerRes = await client.readHoldingRegisters(37001, 2);
+      inverterData.batteryPower = i32FromRegs(battPowerRes.response.body.values);
+      const battSocRes = await client.readHoldingRegisters(37004, 1);
+      inverterData.batterySOC = battSocRes.response.body.values[0] / 10;
+      sectionReadStatus.battery = true;
+    } catch (err) {
+      console.warn('Modbus read failed (battery block):', err);
+      inverterData.batteryPower = 0;
+      inverterData.batterySOC = 0;
+    }
+  } else {
+    inverterData.batteryPower = 0;
+    inverterData.batterySOC = 0;
     sectionReadStatus.battery = true;
-  } catch (err) {
-    console.warn('Modbus read failed (battery block):', err);
   }
 
   const totalLoad = inverterData.activePower - inverterData.gridPower + inverterData.batteryPower;

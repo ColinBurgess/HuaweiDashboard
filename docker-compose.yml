@@ -43,6 +43,7 @@ services:
       - INFLUX_ORG=huawei-dashboard
       - INFLUX_BUCKET=telemetry
       - START_MONOLITH=true
+      - MODBUS_HAS_BATTERY=false
 
   # --- MODO MODULAR (Microservicios) ---
   inverter-collector:
@@ -64,6 +65,7 @@ services:
       - INFLUX_TOKEN=my-super-secret-token
       - INFLUX_ORG=huawei-dashboard
       - INFLUX_BUCKET=telemetry
+      - MODBUS_HAS_BATTERY=false
 
   charger-service:
     build: .
