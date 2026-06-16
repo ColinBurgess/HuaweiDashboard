@@ -91,6 +91,47 @@ Variables disponibles actualmente:
 | `MODBUS_HOST` | `192.168.1.140` | IP del inversor o del dongle |
 | `MODBUS_PORTS` | `502,6607` | Puertos Modbus a probar en orden |
 | `MODBUS_PORT` | `502,6607` | Compatibilidad con configuración antigua de un solo puerto |
+| `MODBUS_HAS_BATTERY` | `false` | Si el inversor tiene batería integrada |
+
+### Alertas por Telegram (Opcional)
+
+El dashboard puede enviar notificaciones automáticas a Telegram cuando:
+- ⚠️ El inversor se desconecta (ej: diferencial saltado)
+- ✅ El inversor se vuelve a conectar
+
+**Configuración**:
+
+| Variable | Descripción |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token del bot (obtenido de @BotFather) |
+| `TELEGRAM_CHAT_ID` | ID del grupo o chat privado |
+| `TELEGRAM_ALERTS_ENABLED` | `true` o `false` para activar/desactivar |
+
+**Cómo configurar Telegram**:
+
+1. **Crear el bot**:
+   - Abre Telegram y busca a `@BotFather`
+   - Escribe `/newbot` y sigue las instrucciones
+   - Guarda el **token** que te proporciona
+
+2. **Crear un grupo** (para ambos recibir alertas):
+   - Crea un grupo privado en Telegram
+   - Añade a tu pareja/familia que quiera recibir alertas
+   - Añade el bot al grupo
+
+3. **Obtener el Chat ID**:
+   - Invita el bot al grupo
+   - En la terminal/logs, podrás ver el `TELEGRAM_CHAT_ID` cuando el bot se inicialice
+   - Alternativamente, envía un mensaje al bot en el grupo y consulta el log
+
+4. **Actualizar .env**:
+   ```env
+   TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+   TELEGRAM_CHAT_ID=-1001234567890
+   TELEGRAM_ALERTS_ENABLED=true
+   ```
+
+**Nota**: Las alertas se envían con un intervalo mínimo de 5 minutos entre el mismo tipo de alerta para evitar spam.
 
 ### Servidor OCPP
 

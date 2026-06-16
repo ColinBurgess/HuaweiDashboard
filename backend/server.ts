@@ -12,6 +12,11 @@ import { InfluxDB, Point } from '@influxdata/influxdb-client';
 
 // @ts-ignore
 import { client as ModbusClient } from 'jsmodbus';
+import {
+  alertInverterDisconnected,
+  alertInverterReconnected,
+  isTelegramEnabled
+} from './services/telegram.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -228,21 +233,21 @@ function rotateCombinedLogIfNeeded() {
     const fileSizeBytes = stats.size;
     const now = new Date();
     const isNewDay = now.toDateString() !== lastLogRotationDate.toDateString();
-    
+
     // Rotate if: file > 100 MB OR day changed
     if (fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES || isNewDay) {
       const rotatedFileName = `combined-${formatLogSessionTimestamp(lastLogRotationDate)}.jsonl`;
       const rotatedFilePath = path.join(LOGS_DIR, rotatedFileName);
-      
+
       // Rename current combined.jsonl to combined-TIMESTAMP.jsonl
       fs.renameSync(COMBINED_LOG_FILE, rotatedFilePath);
-      
-      const reason = fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES 
+
+      const reason = fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES
         ? `size threshold (${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB)`
         : 'daily rotation';
-      
+
       originalConsole.log(`[LOG ROTATION] Rotated combined.jsonl → ${rotatedFileName} (reason: ${reason})`);
-      
+
       lastLogRotationDate = now;
     }
   } catch (err) {
@@ -267,9 +272,9 @@ console.error = (...args: unknown[]) => {
 
 function startLogWatcher() {
   if (process.env.SERVICE_ROLE !== 'dashboard') return;
-  
+
   originalConsole.log('[LOG] Starting unified log watcher...');
-  
+
   let lastSize = 0;
   if (fs.existsSync(COMBINED_LOG_FILE)) {
     lastSize = fs.statSync(COMBINED_LOG_FILE).size;
@@ -277,17 +282,17 @@ function startLogWatcher() {
 
   setInterval(() => {
     if (!fs.existsSync(COMBINED_LOG_FILE)) return;
-    
+
     try {
       const stats = fs.statSync(COMBINED_LOG_FILE);
       if (stats.size > lastSize) {
         const stream = fs.createReadStream(COMBINED_LOG_FILE, { start: lastSize });
         let remainder = '';
-        
+
         stream.on('data', (chunk) => {
           const lines = (remainder + chunk.toString()).split('\n');
           remainder = lines.pop() || '';
-          
+
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
@@ -301,7 +306,7 @@ function startLogWatcher() {
             }
           }
         });
-        
+
         stream.on('end', () => {
           lastSize = stats.size;
         });
@@ -324,11 +329,11 @@ function handleShutdown(signal: NodeJS.Signals) {
   isShuttingDown = true;
   recordLifecycleLog(`Server stopping (${signal})`, 'warn', true);
   originalConsole.warn(`Server stopping (${signal})`);
-  
+
   if (influxWriteApi) {
     influxWriteApi.close().catch(e => originalConsole.error('Error closing InfluxDB Write API:', e));
   }
-  
+
   process.exit(0);
 }
 
@@ -336,6 +341,13 @@ process.once('SIGINT', () => handleShutdown('SIGINT'));
 process.once('SIGTERM', () => handleShutdown('SIGTERM'));
 
 recordLifecycleLog(`Server started. Session log: ${path.basename(RUNTIME_LOG_FILE)}`, 'info', true);
+
+// Log Telegram status
+if (isTelegramEnabled()) {
+  console.log('✅ Telegram alerts ENABLED - Alerts will be sent on inverter disconnect/reconnect');
+} else {
+  console.log('ℹ️  Telegram alerts DISABLED - Set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID and TELEGRAM_ALERTS_ENABLED=true to enable');
+}
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -478,13 +490,13 @@ export function restorePersistedChargerState(): void {
     chargerState.transactionId = Number.isFinite(parsed.transactionId as number)
       ? Number(parsed.transactionId)
       : undefined;
-    
+
     // Live fields
     chargerState.connected = Boolean(parsed.connected);
     chargerState.cableConnected = Boolean(parsed.cableConnected);
     chargerState.status = String(parsed.status ?? 'Disconnected');
     chargerState.powerW = Number(parsed.powerW ?? 0);
-    
+
     chargerState.lastUpdate = new Date().toISOString();
     lastPersistedChargerStateSignature = buildChargerStateSignature();
 
@@ -573,6 +585,7 @@ const client = new ModbusClient.TCP(socket, SLAVE_ID);
 let modbusPortIndex = 0;
 let modbusConsecutiveConnectionFailures = 0;
 let isConnecting = false;
+let hasAlertedDisconnection = false; // Track if we already sent disconnection alert
 
 function currentModbusPort(): number {
   return MODBUS_PORTS[modbusPortIndex];
@@ -580,7 +593,7 @@ function currentModbusPort(): number {
 
 function connectModbus() {
   if (isConnecting || socket.connecting || inverterData.connected) return;
-  
+
   const port = currentModbusPort();
   isConnecting = true;
   originalConsole.log(`Connecting to Modbus ${MODBUS_HOST}:${port}...`);
@@ -603,7 +616,7 @@ function syncChargerIntoInverterData() {
     inverterData.chargerLastUpdate = chargerState.lastUpdate;
     inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
   }
-  
+
   // Fields owned by the Dashboard (User Commands)
   if (isMonolith || isDashboard) {
     inverterData.chargingMode = chargerState.chargingMode;
@@ -657,7 +670,7 @@ function emitCombinedData() {
   }
 
   io.emit('inverter-data', inverterData);
-  
+
   if (!isMonolith) {
     saveLiveState();
   }
@@ -666,13 +679,13 @@ function emitCombinedData() {
 // Map of fields each service is responsible for
 const SERVICE_OWNED_FIELDS: Record<string, string[]> = {
   collector: [
-    'model', 'serialNumber', 'activePower', 'pv1Voltage', 'pv1Current', 
-    'pv2Voltage', 'pv2Current', 'inputPower', 'dailyYield', 'totalYield', 
-    'temperature', 'status', 'gridVoltage', 'gridFrequency', 'gridPower', 
+    'model', 'serialNumber', 'activePower', 'pv1Voltage', 'pv1Current',
+    'pv2Voltage', 'pv2Current', 'inputPower', 'dailyYield', 'totalYield',
+    'temperature', 'status', 'gridVoltage', 'gridFrequency', 'gridPower',
     'batteryPower', 'batterySOC', 'houseLoad', 'consumption', 'lastUpdate', 'connected'
   ],
   charger: [
-    'chargerConnected', 'chargerCableConnected', 'chargerStatus', 'carChargePower', 
+    'chargerConnected', 'chargerCableConnected', 'chargerStatus', 'carChargePower',
     'chargePointId', 'chargerLastUpdate', 'chargerCurrentLimitA'
   ],
   dashboard: [
@@ -683,11 +696,11 @@ const SERVICE_OWNED_FIELDS: Record<string, string[]> = {
 function saveLiveState() {
   const role = process.env.SERVICE_ROLE || 'monolith';
   const targetFile = path.resolve(DATA_DIR, `live-state-${role}.json`);
-  
+
   try {
     const ownedFields = SERVICE_OWNED_FIELDS[role] || [];
     const dataToSave: any = {};
-    
+
     // Only save fields this service "owns" to avoid overwriting others with stale data
     ownedFields.forEach(field => {
       if ((inverterData as any)[field] !== undefined) {
@@ -718,14 +731,14 @@ function loadLiveState() {
       const filePath = path.join(DATA_DIR, file);
       const fileContent = fs.readFileSync(filePath, 'utf8');
       if (!fileContent) continue;
-      
+
       let data;
       try {
         data = JSON.parse(fileContent);
       } catch (e) {
         continue; // Skip corrupt files
       }
-      
+
       if (data.services) {
         inverterData.services = { ...inverterData.services, ...data.services };
         delete data.services;
@@ -741,13 +754,13 @@ function loadLiveState() {
       if (modeChanged || startChanged) {
         const isCharger = process.env.SERVICE_ROLE === 'charger';
         const isMonolith = process.env.START_MONOLITH === 'true';
-        
+
         if (isCharger || isMonolith) {
           originalConsole.log(`[SYNC] Detected external command change: mode=${inverterData.chargingMode} start=${inverterData.chargerStartRequested}`);
           // Sync to chargerState so reconciliation uses the new values
           chargerState.chargingMode = inverterData.chargingMode;
           chargerState.startRequested = inverterData.chargerStartRequested;
-          
+
           reconcileChargerControlState('StateFileSync');
         }
       }
@@ -1550,17 +1563,35 @@ socket.on('connect', () => {
   console.log(`Connected to Inverter via Modbus TCP (${MODBUS_HOST}:${currentModbusPort()})`);
   inverterData.connected = true;
   modbusConsecutiveConnectionFailures = 0;
+
+  // Send reconnection alert if it was previously disconnected
+  if (hasAlertedDisconnection && isTelegramEnabled()) {
+    alertInverterReconnected().catch(err => console.error('Failed to send reconnection alert:', err));
+  }
+  hasAlertedDisconnection = false;
 });
 
 socket.on('error', (err: NodeJS.ErrnoException) => {
   isConnecting = false;
   console.error('Modbus Socket Error:', err.message);
   inverterData.connected = false;
+
+  // Send disconnection alert only once
+  if (!hasAlertedDisconnection && isTelegramEnabled()) {
+    alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
+    hasAlertedDisconnection = true;
+  }
 });
 
 socket.on('close', () => {
   console.log('Modbus Connection Closed');
   inverterData.connected = false;
+
+  // Send disconnection alert only once
+  if (!hasAlertedDisconnection && isTelegramEnabled()) {
+    alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
+    hasAlertedDisconnection = true;
+  }
 
   modbusConsecutiveConnectionFailures += 1;
   if (
@@ -1609,7 +1640,7 @@ async function pollInverter() {
     // Cubre: PV, Potencia Entrada, Voltaje Red, Frecuencia, Potencia Activa, Temperatura, Estado, Rendimiento
     const block1Res = await client.readHoldingRegisters(32016, 100);
     const regs1 = block1Res.response.body.values;
-    
+
     // Mapeo manual basado en offsets desde 32016
     inverterData.pv1Voltage = regs1[32016 - 32016] / 10;
     inverterData.pv1Current = regs1[32017 - 32016] / 100;
@@ -1831,7 +1862,7 @@ app.use(express.json());
 
 app.post('/api/charger/start', (req, res) => {
   const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-  
+
   if (!canSendToCharger()) {
     res.status(503).json({ error: 'Charger not connected' });
     return;
@@ -1881,7 +1912,7 @@ app.post('/api/charger/stop', (req, res) => {
   chargerState.startRequested = false;
   chargerState.appliedCurrentLimitA = undefined;
   chargerState.lastRequestedCurrentLimitA = undefined;
-  
+
   if (isDashboard) {
     syncChargerIntoInverterData();
     saveLiveState();
@@ -1973,7 +2004,7 @@ app.post('/api/charger/probe-smart', (req, res) => {
   });
 });
 
-// The smart loop is now started within startChargerService to ensure 
+// The smart loop is now started within startChargerService to ensure
 // it only runs where the charger connection exists.
 
 app.get('/api/logs/live', (req, res) => {
@@ -2034,17 +2065,17 @@ setInterval(rotateCombinedLogIfNeeded, 3600000); // Check every hour (3600000 ms
 // Export functions for modular services
 export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
-  
+
   // In modular mode, we need to sync with other services (like the charger)
   if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
     console.log('[INIT] Modular mode detected, starting live-state polling for inverter service');
     setInterval(loadLiveState, 1000);
   }
 
-  restorePersistedChargerState(); 
+  restorePersistedChargerState();
   connectModbus();
   setInterval(pollInverter, 1000);
-  
+
   // Health heartbeat
   setInterval(() => {
     const status = inverterData.connected ? 'OK' : 'Error (Disconnected)';
@@ -2055,7 +2086,7 @@ export async function startInverterService() {
 
 export async function startChargerService() {
   console.log('🚀 Starting Charger Service (OCPP)...');
-  
+
   // In modular mode, we need to restore state and sync with the inverter service
   if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
     console.log('[INIT] Modular mode detected, restoring charger state and starting live-state polling');
@@ -2085,11 +2116,11 @@ export async function startChargerService() {
 
 export async function startDashboardService() {
   console.log('🚀 Starting Dashboard Service (API + UI)...');
-  
+
   // In modular mode, we need to poll the state file
   if (process.env.SERVICE_ROLE === 'dashboard') {
     setInterval(loadLiveState, 1000);
-    
+
     // Health heartbeat
     setInterval(() => {
       updateServiceHeartbeat('OK', `Clients: ${io.engine.clientsCount}`);
@@ -2150,7 +2181,7 @@ function saveChargerState() {
       originalConsole.error('Error saving charger state:', err);
     }
   }
-  
+
   // In modular mode, we also update the shared live state
   if (!isMonolith) {
     if (isCharger || isDashboard) {
@@ -2174,10 +2205,10 @@ app.get('/api/history/list', (req, res) => {
 
 app.get('/api/stats/summary', async (req, res) => {
   if (!influxClient) return res.status(503).json({ error: 'InfluxDB not configured' });
-  
+
   try {
     const queryApi = influxClient.getQueryApi(INFLUX_ORG);
-    
+
     // Consulta para totales de hoy, mes y año
     // Nota: Esto es un ejemplo simplificado, se puede expandir
     const today = new Date().toISOString().split('T')[0];
@@ -2212,7 +2243,7 @@ app.get('/api/history/:date', (req, res) => {
 async function queryInfluxStats(rangeStart: string, rangeStop: string) {
   if (!influxClient) return null;
   const queryApi = influxClient.getQueryApi(INFLUX_ORG);
-  
+
   // Usamos integral para calcular Wh (vatios-hora) de forma precisa
   // Dividimos por 3600 porque la integral de W sobre segundos da Ws, y queremos Wh
   const fluxQuery = `
@@ -2232,13 +2263,13 @@ async function queryInfluxStats(rangeStart: string, rangeStop: string) {
         const prod = (o.inputPower ?? 0);
         const cons = (o.consumption ?? 0);
         const grid = (o.gridPower ?? 0); // Esto es la integral de gridPower en Wh
-        
+
         // El problema es que la integral de gridPower mezcla export e import.
         // Para mayor precisión, InfluxDB debería hacerlo antes de la integral.
         // Pero para un resumen rápido, esto nos da una idea.
         result.production = prod / 1000;
         result.consumption = cons / 1000;
-        // Nota: El balance de red es complejo de integrar separado, 
+        // Nota: El balance de red es complejo de integrar separado,
         // usaremos el valor neto por ahora para desbloquear la UI.
         result.export = grid > 0 ? grid / 1000 : 0;
         result.import = grid < 0 ? Math.abs(grid) / 1000 : 0;
@@ -2253,9 +2284,9 @@ async function queryInfluxStats(rangeStart: string, rangeStop: string) {
 app.get('/api/stats/:period', async (req, res) => {
   const { period } = req.params;
   const { date, month, year } = req.query;
-  
+
   let start, stop;
-  
+
   if (period === 'day') {
     const stats = await calculateStatsForDate(date as string);
     return res.json(stats);
@@ -2287,7 +2318,7 @@ async function calculateStatsForDate(date: string) {
 
   const content = fs.readFileSync(filePath, 'utf8');
   const lines = content.split('\n').filter(Boolean);
-  
+
   let totalProduction = 0; // Wh
   let totalConsumption = 0; // Wh
   let totalExport = 0; // Wh
@@ -2298,14 +2329,14 @@ async function calculateStatsForDate(date: string) {
     try {
       const entry = JSON.parse(line);
       const currentTime = new Date(entry.time).getTime();
-      
+
       if (lastTime !== null) {
         const deltaHours = (currentTime - lastTime) / (1000 * 3600);
-        
+
         // Sumamos vatios-hora (Wh) usando las claves correctas del historial
         totalProduction += (entry.inputPower ?? 0) * deltaHours;
         totalConsumption += (entry.consumption ?? 0) * deltaHours;
-        
+
         const gridPower = entry.gridPower ?? 0;
         if (gridPower > 0) {
           totalExport += gridPower * deltaHours;
@@ -2313,7 +2344,7 @@ async function calculateStatsForDate(date: string) {
           totalImport += Math.abs(gridPower) * deltaHours;
         }
       }
-      
+
       lastTime = currentTime;
     } catch (e) {
       continue;
@@ -2341,7 +2372,7 @@ if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts
   restorePersistedChargerState();
   syncChargerIntoInverterData();
   persistChargerStateIfChanged(true);
-  
+
   // Start all services
   startInverterService();
   startChargerService();
