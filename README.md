@@ -5,7 +5,7 @@
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org/)
 [![Docker Support](https://img.shields.io/badge/Docker-Supported-blue)](https://www.docker.com/)
 [![React 19](https://img.shields.io/badge/React-19-cyan)](https://react.dev/)
 [![Tailwind 4](https://img.shields.io/badge/Tailwind-4-blueviolet)](https://tailwindcss.com/)
@@ -62,7 +62,8 @@ Los servicios se comunican mediante un **archivo de estado compartido** (`storag
 
 ## Requisitos previos
 
-- Node.js 18 o superior.
+- Node.js 22 o superior (o 20 como mínimo).
+- pnpm 9 o superior (gestor de dependencias optimizado).
 - Inversor Huawei SUN2000 con Modbus TCP habilitado y accesible en red local.
 - Cargador EV compatible con OCPP 1.6.
 - Acceso a red local hacia el inversor y el cargador.
@@ -70,8 +71,10 @@ Los servicios se comunican mediante un **archivo de estado compartido** (`storag
 ## Instalación
 
 ```bash
-npm install
+pnpm install
 ```
+
+Nota: Si prefieres usar npm, puedes hacerlo (es compatible), pero recomendamos pnpm por su mayor velocidad (~2x más rápido), menor tamaño de dependencias y mejor resolución de dependencias.
 
 ## Configuración
 
@@ -126,7 +129,7 @@ Variables disponibles actualmente:
 ### Desarrollo
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Esto arranca el backend principal desde `server.ts`, incluyendo:
@@ -145,7 +148,7 @@ Endpoints principales mientras está en marcha:
 ### Build frontend
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 Genera el bundle del frontend en `dist/`.
@@ -153,7 +156,7 @@ Genera el bundle del frontend en `dist/`.
 ### Validación TypeScript
 
 ```bash
-npm run lint
+pnpm run lint
 ```
 
 ### Producción (Docker)
