@@ -24,13 +24,13 @@ export interface TelegramAlert {
 function isThrottled(alertType: string): boolean {
   const lastSentTime = alertThrottle.get(alertType);
   if (!lastSentTime) return false;
-
+  
   const now = Date.now();
   if (now - lastSentTime > THROTTLE_DURATION_MS) {
     alertThrottle.delete(alertType);
     return false;
   }
-
+  
   return true;
 }
 
@@ -140,42 +140,6 @@ export async function alertSystemInfo(title: string, message: string): Promise<v
     title,
     message,
     severity: 'info'
-  });
-}
-
-/**
- * Alert: PV Connection Lost (Automatic Breaker Tripped)
- */
-export async function alertPvDisconnected(): Promise<void> {
-  await sendTelegramAlert({
-    type: 'pv_disconnected',
-    title: '⚠️ PV CONNECTION LOST',
-    message: '🔴 El automático de entrada solar ha saltado!\n\nLa conexión de los paneles solares se ha perdido. Revisa el automático del cuadro eléctrico.',
-    severity: 'critical'
-  });
-}
-
-/**
- * Alert: PV Connection Restored
- */
-export async function alertPvReconnected(): Promise<void> {
-  await sendTelegramAlert({
-    type: 'pv_reconnected',
-    title: '✅ PV CONNECTION RESTORED',
-    message: '🟢 La conexión de los paneles solares se ha restaurado correctamente.',
-    severity: 'info'
-  });
-}
-
-/**
- * Alert: PV String Loss (Alarm ID: 2015)
- */
-export async function alertPvStringLoss(): Promise<void> {
-  await sendTelegramAlert({
-    type: 'pv_string_loss',
-    title: '⚠️ PV STRING LOSS DETECTED',
-    message: '🔴 El inversor detecta pérdida de string (Alarm ID: 2015)\n\nVerifica el cableado y conexiones de los paneles solares.',
-    severity: 'warning'
   });
 }
 
