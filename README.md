@@ -132,7 +132,7 @@ El dashboard puede enviar notificaciones automáticas a Telegram para eventos cr
      pnpm tsx backend/scripts/get_telegram_chat_id.ts
      ```
      Envía un mensaje al bot en Telegram y el script te mostrará tu Chat ID.
-   
+
    - **Opción B (Manual)**: Invita el bot al grupo y consulta los logs del dashboard para ver el `TELEGRAM_CHAT_ID`.
 
 4. **Actualizar .env**:

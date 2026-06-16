@@ -24,18 +24,31 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
+// Determinar roles activos de forma centralizada para optimizar recursos
+const role = process.env.SERVICE_ROLE || 'monolith';
+const isMonolith = process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js');
+const isDashboard = isMonolith || role === 'dashboard';
+const isCharger = isMonolith || role === 'charger';
+const isCollector = isMonolith || role === 'collector';
+
+// 1. Inicialización condicional de Express y Socket.io (Solo Dashboard o Monolito)
+const app = isDashboard ? express() : null;
+const httpServer = app ? createServer(app) : null;
+const io = httpServer ? new Server(httpServer, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   }
-});
+}) : null;
 
-io.on('connection', (socket) => {
-  socket.emit('inverter-data', inverterData);
-});
+if (io) {
+  io.on('connection', (socket) => {
+    if (process.env.SERVICE_ROLE === 'dashboard') {
+      loadLiveState();
+    }
+    socket.emit('inverter-data', inverterData);
+  });
+}
 
 const PORT = Number(process.env.PORT ?? process.env.APP_PORT ?? 3001);
 const MODBUS_HOST = process.env.MODBUS_HOST ?? '192.168.1.140';
@@ -44,7 +57,7 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
   .map((port) => Number(port.trim()))
   .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
 const SLAVE_ID = 1;
-// Mapa declarativo de registros Modbus bajo monitorización activa
+
 const MODBUS_REGISTRY_MAP = [
   { address: 30000, length: 15, name: "Identidad del Inversor (Model)", type: "String (ASCII)" },
   { address: 30015, length: 10, name: "Número de Serie (SN)", type: "String (ASCII)" },
@@ -68,17 +81,19 @@ const MODBUS_REGISTRY_MAP = [
 const HISTORY_DIR = path.resolve(process.cwd(), 'storage/history');
 const LOGS_DIR = path.resolve(process.cwd(), 'storage/logs');
 const DATA_DIR = path.resolve(process.cwd(), 'storage/data');
+
 console.log(`[INIT] Storage Paths:
   HISTORY: ${HISTORY_DIR}
   LOGS:    ${LOGS_DIR}
   DATA:    ${DATA_DIR}`);
+
 const CHARGER_STATE_FILE = path.resolve(DATA_DIR, 'charger-state.json');
 const LIVE_STATE_FILE = path.resolve(DATA_DIR, 'live-state.json');
-const STATE_FILE = LIVE_STATE_FILE; // For backward compatibility
+const STATE_FILE = LIVE_STATE_FILE; // Retrocompatibilidad
 const CHARGER_STATE_TMP_FILE = `${CHARGER_STATE_FILE}.tmp`;
 const SERVER_START_TIME = new Date();
 
-// InfluxDB Config
+// Configuración de InfluxDB (Solo se escribe desde el colector de telemetría)
 const INFLUX_URL = process.env.INFLUX_URL || 'http://localhost:8086';
 const INFLUX_TOKEN = process.env.INFLUX_TOKEN || '';
 const INFLUX_ORG = process.env.INFLUX_ORG || 'huawei-dashboard';
@@ -154,22 +169,18 @@ function formatLogSessionTimestamp(date: Date): string {
 }
 
 const RUNTIME_LOG_FILE = path.join(LOGS_DIR, `${formatLogSessionTimestamp(SERVER_START_TIME)}.jsonl`);
-
 const COMBINED_LOG_FILE = path.join(LOGS_DIR, 'combined.jsonl');
 
 function stringifyLogArg(arg: unknown): string {
   if (arg instanceof Error) {
     return arg.stack ?? arg.message;
   }
-
   if (typeof arg === 'string') {
     return arg;
   }
-
   if (typeof arg === 'number' || typeof arg === 'boolean' || arg == null) {
     return String(arg);
   }
-
   try {
     return JSON.stringify(arg, null, 2);
   } catch {
@@ -182,8 +193,9 @@ function storeLiveLog(entry: RuntimeLogEntry) {
   if (liveLogs.length > MAX_LIVE_LOGS) {
     liveLogs.splice(0, liveLogs.length - MAX_LIVE_LOGS);
   }
-
-  io.emit('server-log', entry);
+  if (io) {
+    io.emit('server-log', entry);
+  }
 }
 
 function appendRuntimeLog(entry: RuntimeLogEntry, sync = false) {
@@ -199,7 +211,6 @@ function appendRuntimeLog(entry: RuntimeLogEntry, sync = false) {
       }
       continue;
     }
-
     fs.appendFile(target, serializedEntry, (err) => {
       if (err) {
         originalConsole.error(`Error saving runtime log to ${target}:`, err);
@@ -212,19 +223,16 @@ function persistRuntimeLog(level: RuntimeLogLevel, source: string, args: unknown
   if (args.length === 0) {
     return;
   }
-
   const message = args.map(stringifyLogArg).join(' ');
   if (message.trim().length === 0) {
     return;
   }
-
   const entry: RuntimeLogEntry = {
     time: new Date().toISOString(),
     level,
     source: process.env.SERVICE_ROLE || source,
     message,
   };
-
   storeLiveLog(entry);
   appendRuntimeLog(entry);
 }
@@ -236,34 +244,29 @@ function recordLifecycleLog(message: string, level: RuntimeLogLevel = 'info', sy
     source: process.env.SERVICE_ROLE ? `${process.env.SERVICE_ROLE}/lifecycle` : 'lifecycle',
     message,
   };
-
   storeLiveLog(entry);
   appendRuntimeLog(entry, sync);
 }
 
-// Log rotation constants
 const MAX_COMBINED_LOG_SIZE_MB = 100;
 const MAX_COMBINED_LOG_SIZE_BYTES = MAX_COMBINED_LOG_SIZE_MB * 1024 * 1024;
 let lastLogRotationDate = new Date();
 
 function rotateCombinedLogIfNeeded() {
+  if (!isDashboard) return; // Solo el dashboard gestiona la rotación de archivos
   try {
-    // Check if combined.jsonl exists and get its size
     if (!fs.existsSync(COMBINED_LOG_FILE)) {
-      return; // File doesn't exist yet, nothing to rotate
+      return;
     }
-
     const stats = fs.statSync(COMBINED_LOG_FILE);
     const fileSizeBytes = stats.size;
     const now = new Date();
     const isNewDay = now.toDateString() !== lastLogRotationDate.toDateString();
 
-    // Rotate if: file > 100 MB OR day changed
     if (fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES || isNewDay) {
       const rotatedFileName = `combined-${formatLogSessionTimestamp(lastLogRotationDate)}.jsonl`;
       const rotatedFilePath = path.join(LOGS_DIR, rotatedFileName);
 
-      // Rename current combined.jsonl to combined-TIMESTAMP.jsonl
       fs.renameSync(COMBINED_LOG_FILE, rotatedFilePath);
 
       const reason = fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES
@@ -271,7 +274,6 @@ function rotateCombinedLogIfNeeded() {
         : 'daily rotation';
 
       originalConsole.log(`[LOG ROTATION] Rotated combined.jsonl → ${rotatedFileName} (reason: ${reason})`);
-
       lastLogRotationDate = now;
     }
   } catch (err) {
@@ -306,7 +308,6 @@ function startLogWatcher() {
 
   setInterval(() => {
     if (!fs.existsSync(COMBINED_LOG_FILE)) return;
-
     try {
       const stats = fs.statSync(COMBINED_LOG_FILE);
       if (stats.size > lastSize) {
@@ -321,12 +322,11 @@ function startLogWatcher() {
             if (!line.trim()) continue;
             try {
               const entry = JSON.parse(line);
-              // Avoid duplicate logs from the dashboard itself as it already emits them in persistRuntimeLog
               if (!entry.source.startsWith('dashboard')) {
                 storeLiveLog(entry);
               }
             } catch (e) {
-              // Ignore parse errors
+              // Ignorar errores de parseo
             }
           }
         });
@@ -338,7 +338,7 @@ function startLogWatcher() {
         lastSize = stats.size;
       }
     } catch (err) {
-      // Ignore errors (e.g. file busy)
+      // Ignorar errores transitorios de archivo
     }
   }, 1000);
 }
@@ -349,7 +349,6 @@ function handleShutdown(signal: NodeJS.Signals) {
   if (isShuttingDown) {
     return;
   }
-
   isShuttingDown = true;
   recordLifecycleLog(`Server stopping (${signal})`, 'warn', true);
   originalConsole.warn(`Server stopping (${signal})`);
@@ -357,7 +356,6 @@ function handleShutdown(signal: NodeJS.Signals) {
   if (influxWriteApi) {
     influxWriteApi.close().catch(e => originalConsole.error('Error closing InfluxDB Write API:', e));
   }
-
   process.exit(0);
 }
 
@@ -366,7 +364,6 @@ process.once('SIGTERM', () => handleShutdown('SIGTERM'));
 
 recordLifecycleLog(`Server started. Session log: ${path.basename(RUNTIME_LOG_FILE)}`, 'info', true);
 
-// Log Telegram status
 if (isTelegramEnabled()) {
   console.log('✅ Telegram alerts ENABLED - Alerts will be sent on inverter disconnect/reconnect');
 } else {
@@ -375,8 +372,6 @@ if (isTelegramEnabled()) {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-
-// Helper functions for data conversion
 function u16ToStr(registers: any): string {
   const regs = Array.isArray(registers) ? registers : Array.from(registers as Uint8Array);
   const buffer = Buffer.alloc(regs.length * 2);
@@ -467,7 +462,6 @@ function persistChargerStateIfChanged(force = false): void {
     if (!force && signature === lastPersistedChargerStateSignature) {
       return;
     }
-
     const payload: PersistedChargerState = {
       chargingMode: chargerState.chargingMode,
       startRequested: chargerState.startRequested,
@@ -480,7 +474,6 @@ function persistChargerStateIfChanged(force = false): void {
       powerW: chargerState.powerW,
       savedAt: new Date().toISOString(),
     };
-
     fs.writeFileSync(CHARGER_STATE_TMP_FILE, JSON.stringify(payload, null, 2), 'utf8');
     fs.renameSync(CHARGER_STATE_TMP_FILE, CHARGER_STATE_FILE);
     lastPersistedChargerStateSignature = signature;
@@ -494,7 +487,6 @@ export function restorePersistedChargerState(): void {
     console.log('[STATE] No persisted charger state file found, starting with defaults');
     return;
   }
-
   try {
     const raw = fs.readFileSync(CHARGER_STATE_FILE, 'utf8');
     const parsed = JSON.parse(raw) as Partial<PersistedChargerState>;
@@ -503,7 +495,6 @@ export function restorePersistedChargerState(): void {
     if (mode === 'FAST' || mode === 'GREEN' || mode === 'HYBRID') {
       chargerState.chargingMode = mode;
     }
-
     chargerState.startRequested = Boolean(parsed.startRequested);
     chargerState.appliedCurrentLimitA = Number.isFinite(parsed.appliedCurrentLimitA as number)
       ? Number(parsed.appliedCurrentLimitA)
@@ -515,7 +506,6 @@ export function restorePersistedChargerState(): void {
       ? Number(parsed.transactionId)
       : undefined;
 
-    // Live fields
     chargerState.connected = Boolean(parsed.connected);
     chargerState.cableConnected = Boolean(parsed.cableConnected);
     chargerState.status = String(parsed.status ?? 'Disconnected');
@@ -532,19 +522,16 @@ export function restorePersistedChargerState(): void {
   }
 }
 
-// Active WebSocket connection to the charger (only one at a time)
 let chargerWs: WebSocket | null = null;
 let pendingApiStopRequest = false;
 
-// Cooldown mechanism: track consecutive StopTransaction(reason=Other) to avoid aggressive restart loops
-const STOP_OTHER_COOLDOWN_THRESHOLD = 3;       // after this many consecutive reason=Other stops...
-const STOP_OTHER_COOLDOWN_MS       = 60_000;   // ...wait this long before re-arming (ms)
+const STOP_OTHER_COOLDOWN_THRESHOLD = 3;
+const STOP_OTHER_COOLDOWN_MS       = 60_000;
 let consecutiveStopReasonOtherCount = 0;
-let stopReasonOtherCooldownUntil   = 0;        // epoch ms, re-arm blocked until this time
+let stopReasonOtherCooldownUntil   = 0;
 
 function writeToInflux(data: any) {
-  if (!influxWriteApi) return;
-
+  if (!influxWriteApi || !isCollector) return; // Guard para evitar escrituras desde contenedores sin rol colector
   try {
     const point = new Point('telemetry')
       .tag('model', data.model)
@@ -563,12 +550,10 @@ function writeToInflux(data: any) {
       .floatField('temperature', data.temperature);
 
     influxWriteApi.writePoint(point);
-    // No hace falta hacer flush cada vez, la librería lo hace en batches automáticamente
   } catch (error) {
     originalConsole.error('Error writing to InfluxDB:', error);
   }
 }
-
 
 let inverterData = {
   model: 'Unknown',
@@ -601,19 +586,19 @@ let inverterData = {
   consumption: 0,
   lastUpdate: new Date().toISOString(),
   connected: false,
-  pvConnectionStatus: true, // Bit 1 of register 32002: PV connection (1=connected, 0=disconnected)
-  pvStringLossAlarm: false, // Bit 6 of register 32010: PV String Loss alarm (Alarm ID: 2015)
+  pvConnectionStatus: true,
+  pvStringLossAlarm: false,
   services: {} as Record<string, { lastHeartbeat: string, status: string, details?: string }>
 };
 
-const socket = new net.Socket();
-const client = new ModbusClient.TCP(socket, SLAVE_ID);
+// 2. Inicialización condicional de Modbus (Solo Colector de Inversor o Monolito)
+const socket = isCollector ? new net.Socket() : null;
+const client = socket ? new ModbusClient.TCP(socket, SLAVE_ID) : null;
 let modbusPortIndex = 0;
 let modbusConsecutiveConnectionFailures = 0;
 let isConnecting = false;
-let hasAlertedDisconnection = false; // Track if we already sent disconnection alert
+let hasAlertedDisconnection = false;
 
-// PV Connection & String Loss Alarm tracking
 let pvConnectionStatusPrevious = true;
 let pvStringLossAlarmPrevious = false;
 let hasAlertedPvDisconnection = false;
@@ -624,6 +609,7 @@ function currentModbusPort(): number {
 }
 
 function connectModbus() {
+  if (!socket) return;
   if (isConnecting || socket.connecting || inverterData.connected) return;
 
   const port = currentModbusPort();
@@ -635,11 +621,10 @@ function connectModbus() {
 function syncChargerIntoInverterData() {
   const role = process.env.SERVICE_ROLE || 'monolith';
   const isMonolith = process.env.START_MONOLITH === 'true' || role === 'monolith';
-  const isCharger = role === 'charger';
-  const isDashboard = role === 'dashboard';
+  const isChargerRole = role === 'charger';
+  const isDashboardRole = role === 'dashboard';
 
-  // Fields owned by the Charger Service (Telemetry)
-  if (isMonolith || isCharger) {
+  if (isMonolith || isChargerRole) {
     inverterData.carChargePower = Math.max(0, chargerState.powerW);
     inverterData.chargerConnected = chargerState.connected;
     inverterData.chargerCableConnected = chargerState.cableConnected;
@@ -649,8 +634,7 @@ function syncChargerIntoInverterData() {
     inverterData.chargerCurrentLimitA = chargerState.appliedCurrentLimitA ?? null;
   }
 
-  // Fields owned by the Dashboard (User Commands)
-  if (isMonolith || isDashboard) {
+  if (isMonolith || isDashboardRole) {
     inverterData.chargingMode = chargerState.chargingMode;
     inverterData.chargerStartRequested = chargerState.startRequested;
   }
@@ -658,11 +642,9 @@ function syncChargerIntoInverterData() {
 
 function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined {
   const status = String(statusRaw ?? '').toLowerCase();
-
   if (status === 'available') {
     return false;
   }
-
   if (
     status === 'preparing'
     || status === 'charging'
@@ -672,7 +654,6 @@ function inferCableConnectedFromStatus(statusRaw: unknown): boolean | undefined 
   ) {
     return true;
   }
-
   return undefined;
 }
 
@@ -687,28 +668,27 @@ function updateServiceHeartbeat(status = 'OK', details?: string) {
 }
 
 function emitCombinedData() {
-  const isMonolith = process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js');
-  const isCharger = process.env.SERVICE_ROLE === 'charger';
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-  const isCollector = process.env.SERVICE_ROLE === 'collector';
+  const role = process.env.SERVICE_ROLE || 'monolith';
+  const isMonolithLocal = process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js');
+  const isChargerRole = role === 'charger';
+  const isDashboardRole = role === 'dashboard';
 
-  // Sync charger data into the inverter object so the UI and states are consistent
-  // In modular mode, Dashboard needs to sync its own commands, and Charger needs to sync its telemetry.
-  if (isMonolith || isCharger || isDashboard) {
+  if (isMonolithLocal || isChargerRole || isDashboardRole) {
     syncChargerIntoInverterData();
-    if (isMonolith || isCharger) {
+    if (isMonolithLocal || isChargerRole) {
       persistChargerStateIfChanged();
     }
   }
 
-  io.emit('inverter-data', inverterData);
+  if (io) {
+    io.emit('inverter-data', inverterData);
+  }
 
-  if (!isMonolith) {
+  if (!isMonolithLocal) {
     saveLiveState();
   }
 }
 
-// Map of fields each service is responsible for
 const SERVICE_OWNED_FIELDS: Record<string, string[]> = {
   collector: [
     'model', 'serialNumber', 'activePower', 'pv1Voltage', 'pv1Current',
@@ -733,19 +713,20 @@ function saveLiveState() {
     const ownedFields = SERVICE_OWNED_FIELDS[role] || [];
     const dataToSave: any = {};
 
-    // Only save fields this service "owns" to avoid overwriting others with stale data
     ownedFields.forEach(field => {
       if ((inverterData as any)[field] !== undefined) {
         dataToSave[field] = (inverterData as any)[field];
       }
     });
 
-    // Always include health heartbeat
     if (inverterData.services[role]) {
       dataToSave.services = { [role]: inverterData.services[role] };
     }
 
-    fs.writeFileSync(targetFile, JSON.stringify(dataToSave, null, 2));
+    // Escritura atómica para prevenir lecturas corruptas de otros contenedores
+    const tmpFile = `${targetFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(dataToSave, null, 2), 'utf8');
+    fs.renameSync(tmpFile, targetFile);
   } catch (err) {
     originalConsole.error(`[ERROR] Failed to save live state for ${role}:`, err);
   }
@@ -757,10 +738,11 @@ function loadLiveState() {
     const role = process.env.SERVICE_ROLE || 'monolith';
 
     for (const file of files) {
-      // Don't load our own file to avoid overwriting our live memory with stale disk data
       if (file === `live-state-${role}.json`) continue;
 
       const filePath = path.join(DATA_DIR, file);
+      if (!fs.existsSync(filePath)) continue;
+
       const fileContent = fs.readFileSync(filePath, 'utf8');
       if (!fileContent) continue;
 
@@ -768,7 +750,7 @@ function loadLiveState() {
       try {
         data = JSON.parse(fileContent);
       } catch (e) {
-        continue; // Skip corrupt files
+        continue;
       }
 
       if (data.services) {
@@ -776,20 +758,17 @@ function loadLiveState() {
         delete data.services;
       }
 
-      // Detect if important commands (Mode or Start/Stop) changed before merging
       const modeChanged = data.chargingMode && data.chargingMode !== inverterData.chargingMode;
       const startChanged = data.chargerStartRequested !== undefined && data.chargerStartRequested !== inverterData.chargerStartRequested;
 
       Object.assign(inverterData, data);
 
-      // If we are the charger service and a user command changed, react immediately
       if (modeChanged || startChanged) {
-        const isCharger = process.env.SERVICE_ROLE === 'charger';
-        const isMonolith = process.env.START_MONOLITH === 'true';
+        const isChargerRole = process.env.SERVICE_ROLE === 'charger';
+        const isMonolithLocal = process.env.START_MONOLITH === 'true';
 
-        if (isCharger || isMonolith) {
+        if (isChargerRole || isMonolithLocal) {
           originalConsole.log(`[SYNC] Detected external command change: mode=${inverterData.chargingMode} start=${inverterData.chargerStartRequested}`);
-          // Sync to chargerState so reconciliation uses the new values
           chargerState.chargingMode = inverterData.chargingMode;
           chargerState.startRequested = inverterData.chargerStartRequested;
 
@@ -798,7 +777,6 @@ function loadLiveState() {
       }
     }
 
-    // Sync back to chargerState for general consistency
     chargerState.connected = inverterData.chargerConnected;
     chargerState.cableConnected = inverterData.chargerCableConnected;
     chargerState.status = inverterData.chargerStatus;
@@ -810,7 +788,7 @@ function loadLiveState() {
 
     emitCombinedData();
   } catch (error) {
-    // Files might not exist yet or be temporarily locked
+    // Ignorar fallos de acceso o locks temporales
   }
 }
 
@@ -851,20 +829,15 @@ function rememberPendingOcppCall(chargePointId: string, uniqueId: string, action
 
 function consumePendingOcppCall(chargePointId: string, uniqueId: string): PendingOcppCall | undefined {
   const map = pendingOcppCallsByChargePoint.get(chargePointId);
-  if (!map) {
-    return undefined;
-  }
+  if (!map) return undefined;
 
   const pending = map.get(uniqueId);
-  if (!pending) {
-    return undefined;
-  }
+  if (!pending) return undefined;
 
   map.delete(uniqueId);
   if (map.size === 0) {
     pendingOcppCallsByChargePoint.delete(chargePointId);
   }
-
   return pending;
 }
 
@@ -878,7 +851,6 @@ function sendOcppCall(
   if (ws.readyState !== ws.OPEN) {
     return undefined;
   }
-
   const uniqueId = generateCallId();
   const frame: OcppCall = [2, uniqueId, action, payload];
   ws.send(JSON.stringify(frame));
@@ -902,26 +874,16 @@ const chargingScheduleRateUnitByChargePoint = new Map<string, 'A' | 'W'>();
 
 function normalizeChargingRateUnit(rawValue?: string): 'A' | 'W' | undefined {
   const value = String(rawValue ?? '').trim().toLowerCase();
-  if (!value) {
-    return undefined;
-  }
+  if (!value) return undefined;
 
   if (value === 'a' || value === 'amp' || value === 'amps' || value === 'current') {
     return 'A';
   }
-
   if (value === 'w' || value === 'watt' || value === 'watts' || value === 'power') {
     return 'W';
   }
-
-  if (value.includes('power')) {
-    return 'W';
-  }
-
-  if (value.includes('current') || value.includes('amp')) {
-    return 'A';
-  }
-
+  if (value.includes('power')) return 'W';
+  if (value.includes('current') || value.includes('amp')) return 'A';
   return undefined;
 }
 
@@ -929,11 +891,9 @@ function getPreferredProbeRateUnit(chargePointId: string): 'A' | 'W' {
   if (OCPP_SMART_PROBE_RATE_UNIT === 'w' || OCPP_SMART_PROBE_RATE_UNIT === 'power') {
     return 'W';
   }
-
   if (OCPP_SMART_PROBE_RATE_UNIT === 'a' || OCPP_SMART_PROBE_RATE_UNIT === 'current') {
     return 'A';
   }
-
   return chargingScheduleRateUnitByChargePoint.get(chargePointId) ?? 'A';
 }
 
@@ -955,7 +915,6 @@ function logGetConfigurationResult(chargePointId: string, result: GetConfigurati
       } else if (units.includes('A')) {
         chargingScheduleRateUnitByChargePoint.set(chargePointId, 'A');
       }
-
       const preferred = getPreferredProbeRateUnit(chargePointId);
       console.log(
         `[${chargePointId}] [CONFIG]   Effective probe unit=${preferred} (env=${OCPP_SMART_PROBE_RATE_UNIT}, reported=${entry.value ?? '<unset>'})`,
@@ -1073,7 +1032,6 @@ function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string)
     console.log(`[${chargePointId}] Skipping telemetry reconfiguration (debounced < 5min)`);
     return;
   }
-
   lastOcppConfigAtByChargePoint.set(chargePointId, now);
 
   sendOcppCall(ws, chargePointId, 'GetConfiguration', {});
@@ -1092,9 +1050,8 @@ function configureChargerTelemetryIfNeeded(ws: WebSocket, chargePointId: string)
 }
 
 function canSendToCharger(): boolean {
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-  // In dashboard mode, we allow "sending" to arm the command in the shared state
-  if (isDashboard) return true;
+  const isDashboardRole = process.env.SERVICE_ROLE === 'dashboard';
+  if (isDashboardRole) return true;
   return Boolean(chargerWs && chargerWs.readyState === (chargerWs.OPEN ?? 1));
 }
 
@@ -1102,7 +1059,6 @@ function sendRemoteStartTransaction(): boolean {
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
-
   sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStartTransaction', {
     connectorId: 1,
     idTag: 'Dashboard',
@@ -1117,7 +1073,6 @@ function sendRemoteStopTransaction(): boolean {
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
-
   const txId = chargerState.transactionId ?? 0;
   sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStopTransaction', { transactionId: txId });
   chargerState.lastUpdate = new Date().toISOString();
@@ -1130,7 +1085,6 @@ function sendChargingLimit(amps: number): boolean {
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
-
   const chargePointId = chargerState.chargePointId || 'CP?';
   const sanitizedAmps = Math.max(
     GREEN_MIN_CHARGING_AMPS,
@@ -1179,13 +1133,11 @@ function clearChargingLimit(): boolean {
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
-
   const payload = {
     connectorId: 1,
     chargingProfilePurpose: 'TxDefaultProfile',
     stackLevel: 1,
   };
-
   sendOcppCall(
     chargerWs,
     chargerState.chargePointId || 'CP?',
@@ -1202,17 +1154,9 @@ function clearChargingLimit(): boolean {
 }
 
 function applyGreenChargingPolicy(): void {
-  if (chargerState.chargingMode !== 'GREEN') {
-    return;
-  }
-
-  if (!chargerState.startRequested) {
-    return;
-  }
-
-  if (!canSendToCharger()) {
-    return;
-  }
+  if (chargerState.chargingMode !== 'GREEN') return;
+  if (!chargerState.startRequested) return;
+  if (!canSendToCharger()) return;
 
   const gridNetW = inverterData.gridPower;
   const chargerPowerW = Math.max(0, chargerState.powerW);
@@ -1249,24 +1193,15 @@ function applyGreenChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-
   if (chargerState.status !== 'Charging') {
     sendRemoteStartTransaction();
   }
 }
 
 function applyHybridChargingPolicy(): void {
-  if (chargerState.chargingMode !== 'HYBRID') {
-    return;
-  }
-
-  if (!chargerState.startRequested) {
-    return;
-  }
-
-  if (!canSendToCharger()) {
-    return;
-  }
+  if (chargerState.chargingMode !== 'HYBRID') return;
+  if (!chargerState.startRequested) return;
+  if (!canSendToCharger()) return;
 
   const gridNetW = inverterData.gridPower;
   const chargerPowerW = Math.max(0, chargerState.powerW);
@@ -1293,7 +1228,6 @@ function applyHybridChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-
   if (chargerState.status !== 'Charging') {
     sendRemoteStartTransaction();
   }
@@ -1304,22 +1238,20 @@ function applySmartChargingPolicy(): void {
     applyGreenChargingPolicy();
     return;
   }
-
   if (chargerState.chargingMode === 'HYBRID') {
     applyHybridChargingPolicy();
   }
 }
 
 function reconcileChargerControlState(trigger: string): void {
-  const isCharger = process.env.SERVICE_ROLE === 'charger';
-  const isMonolith = process.env.START_MONOLITH === 'true';
-  const isOperational = isCharger || isMonolith;
+  const isChargerRole = process.env.SERVICE_ROLE === 'charger';
+  const isMonolithLocal = process.env.START_MONOLITH === 'true';
+  const isOperational = isChargerRole || isMonolithLocal;
 
   console.log(
     `[RECON] trigger=${trigger} mode=${chargerState.chargingMode} startRequested=${chargerState.startRequested} connected=${chargerState.connected} status=${chargerState.status} appliedLimitA=${chargerState.appliedCurrentLimitA ?? 'none'} txId=${chargerState.transactionId ?? 'none'}`,
   );
 
-  // If no start requested, ensure we are stopped
   if (!chargerState.startRequested) {
     if (isOperational && (chargerState.status === 'Charging' || chargerState.status === 'SuspendedEV' || chargerState.status === 'SuspendedEVSE')) {
       console.log('[RECON] Stop requested but charger is active — sending RemoteStopTransaction');
@@ -1330,13 +1262,11 @@ function reconcileChargerControlState(trigger: string): void {
     return;
   }
 
-  // Cooldown: charger keeps sending StopTransaction(reason=Other) — back off to avoid hammering
   if (Date.now() < stopReasonOtherCooldownUntil) {
     const remainingSecs = Math.ceil((stopReasonOtherCooldownUntil - Date.now()) / 1000);
     console.log(`[RECON] Cooldown active (${remainingSecs}s remaining after ${consecutiveStopReasonOtherCount} consecutive reason=Other stops) – skipping re-arm`);
     return;
   } else if (stopReasonOtherCooldownUntil > 0) {
-    // Cooldown just expired — reset and allow retry
     console.log(`[RECON] Cooldown expired after ${consecutiveStopReasonOtherCount} consecutive reason=Other stops — resetting counter and retrying`);
     consecutiveStopReasonOtherCount = 0;
     stopReasonOtherCooldownUntil = 0;
@@ -1352,7 +1282,6 @@ function reconcileChargerControlState(trigger: string): void {
     return;
   }
 
-  // Logic for FAST mode (direct start with max limit)
   if (chargerState.chargingMode === 'FAST') {
     if (chargerState.status !== 'Charging') {
       console.log('[RECON] FAST mode start — sending max limit and start command');
@@ -1367,7 +1296,6 @@ function reconcileChargerControlState(trigger: string): void {
     return;
   }
 
-  // Logic for Smart Modes (GREEN / HYBRID)
   console.log(`[RECON] Applying smart policy for mode=${chargerState.chargingMode}`);
   applySmartChargingPolicy();
 }
@@ -1404,13 +1332,11 @@ function parseMeterPower(payload: Record<string, any>): number | undefined {
       if (measurand === 'Power.Active.Import' || measurand === 'Power.Active.Export') {
         return unit === 'kW' ? Math.round(valueRaw * 1000) : Math.round(valueRaw);
       }
-
       if (!measurand && (!unit || unit === 'W' || unit === 'kW') && (!context || context === 'Sample.Periodic')) {
         return unit === 'kW' ? Math.round(valueRaw * 1000) : Math.round(valueRaw);
       }
     }
   }
-
   return undefined;
 }
 
@@ -1420,7 +1346,6 @@ function handleOcppCall(
   frame: OcppCall,
 ) {
   const [, uniqueId, action, payload] = frame;
-
   console.log(`[${chargePointId}] OCPP Call: ${action}`);
 
   switch (action) {
@@ -1455,15 +1380,13 @@ function handleOcppCall(
       const previousStatus = chargerState.status;
       chargerState.connected = true;
       chargerState.chargePointId = chargePointId;
-      // connectorId 0 is the charger unit itself (always "Available"), ignore it.
-      // Only update status from connectorId >= 1 (actual charging connectors).
+
       if ((payload.connectorId ?? 1) >= 1) {
         chargerState.status = String(payload.status ?? chargerState.status ?? 'Unknown');
         const inferredCableConnected = inferCableConnectedFromStatus(payload.status);
         if (inferredCableConnected !== undefined) {
           chargerState.cableConnected = inferredCableConnected;
         }
-        // Reset power when not actively charging
         if (chargerState.status !== 'Charging') {
           chargerState.powerW = 0;
           chargerState.transactionId = undefined;
@@ -1473,7 +1396,7 @@ function handleOcppCall(
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
       console.log(`[${chargePointId}] StatusNotification`, payload);
-      // If charger recovers from Unavailable and we have a pending start request, reconcile now
+
       if (previousStatus === 'Unavailable' && chargerState.status !== 'Unavailable' && chargerState.startRequested) {
         console.log(`[${chargePointId}] Charger recovered from Unavailable \u2192 triggering reconciliation`);
         reconcileChargerControlState('UnavailableRecovered');
@@ -1485,12 +1408,9 @@ function handleOcppCall(
       if (Number.isFinite(power)) {
         chargerState.powerW = Math.max(0, Number(power));
       }
-      // Capture transactionId reported by charger (useful when charging started before we connected)
       if (payload.transactionId !== undefined && payload.transactionId !== null) {
         chargerState.transactionId = Number(payload.transactionId);
       }
-      // Some chargers do not send initial StatusNotification after reconnect.
-      // Infer cable/session state from periodic meter traffic to avoid false "cable disconnected" UI.
       if (chargerState.powerW > 0) {
         chargerState.cableConnected = true;
         chargerState.status = 'Charging';
@@ -1523,9 +1443,6 @@ function handleOcppCall(
       })));
       emitCombinedData();
       console.log(`[${chargePointId}] StartTransaction accepted, assigned txId=${chargerState.transactionId}`, payload);
-      if (OCPP_SMART_PROBE_ON_CONNECT) {
-        console.log(`[${chargePointId}] [PROBE] Auto probe on StartTransaction is disabled to avoid overriding active charging limits`);
-      }
       return;
 
     case 'StopTransaction': {
@@ -1540,6 +1457,7 @@ function handleOcppCall(
       ws.send(JSON.stringify(buildCallResult(uniqueId, { idTagInfo: { status: 'Accepted' } })));
       emitCombinedData();
       console.log(`[${chargePointId}] StopTransaction`, payload);
+
       if (chargerState.startRequested) {
         const stopReason: string = payload?.reason ?? 'unknown';
         if (stopReason === 'Other') {
@@ -1553,18 +1471,14 @@ function handleOcppCall(
             return;
           }
         } else {
-          // Successful stop (Local, EVDisconnected, etc.) — reset the error counter
           consecutiveStopReasonOtherCount = 0;
           stopReasonOtherCooldownUntil = 0;
         }
 
-        // Charger/EV locally ended the transaction. Avoid immediate re-arm storm;
-        // periodic smart loop can decide later if restart still makes sense.
         if (stopReason === 'Local') {
           console.log(`[${chargePointId}] StopTransaction(reason=Local) -> skipping immediate re-arm; waiting for periodic smart loop`);
           return;
         }
-
         console.log(`[${chargePointId}] StopTransaction received without API stop request -> keeping smart mode armed (reason=${stopReason}, consecutiveOther=${consecutiveStopReasonOtherCount})`);
         reconcileChargerControlState('StopTransactionWithoutApiStop');
       }
@@ -1590,97 +1504,86 @@ function handleOcppCall(
   }
 }
 
-socket.on('connect', () => {
-  isConnecting = false;
-  console.log(`Connected to Inverter via Modbus TCP (${MODBUS_HOST}:${currentModbusPort()})`);
-  inverterData.connected = true;
-  modbusConsecutiveConnectionFailures = 0;
-
-  // Send reconnection alert if it was previously disconnected
-  if (hasAlertedDisconnection && isTelegramEnabled()) {
-    alertInverterReconnected().catch(err => console.error('Failed to send reconnection alert:', err));
-  }
-  hasAlertedDisconnection = false;
-});
-
-socket.on('error', (err: NodeJS.ErrnoException) => {
-  isConnecting = false;
-  console.error('Modbus Socket Error:', err.message);
-  inverterData.connected = false;
-
-  // Send disconnection alert only once
-  if (!hasAlertedDisconnection && isTelegramEnabled()) {
-    alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
-    hasAlertedDisconnection = true;
-  }
-});
-
-socket.on('close', () => {
-  console.log('Modbus Connection Closed');
-  inverterData.connected = false;
-
-  // Send disconnection alert only once
-  if (!hasAlertedDisconnection && isTelegramEnabled()) {
-    alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
-    hasAlertedDisconnection = true;
-  }
-
-  modbusConsecutiveConnectionFailures += 1;
-  if (
-    MODBUS_PORTS.length > 1
-    && modbusConsecutiveConnectionFailures >= MODBUS_PORT_ROTATE_THRESHOLD
-  ) {
-    modbusPortIndex = (modbusPortIndex + 1) % MODBUS_PORTS.length;
+if (socket) {
+  socket.on('connect', () => {
+    isConnecting = false;
+    console.log(`Connected to Inverter via Modbus TCP (${MODBUS_HOST}:${currentModbusPort()})`);
+    inverterData.connected = true;
     modbusConsecutiveConnectionFailures = 0;
-    console.warn(`Rotating Modbus port after persistent connection failures. Next port: ${currentModbusPort()}`);
-  }
 
-  setTimeout(() => {
-    if (!inverterData.connected) {
-      connectModbus();
+    if (hasAlertedDisconnection && isTelegramEnabled()) {
+      alertInverterReconnected().catch(err => console.error('Failed to send reconnection alert:', err));
     }
-  }, MODBUS_RECONNECT_DELAY_MS);
-});
-// Track PV status reads - only alert if we successfully read the registers
-let pvStatusRegistersAvailable = false;
-// Nueva variable para controlar que el log de éxito de telemetría se envíe solo una vez
-let firstTelemetrySyncLogged = false;
+    hasAlertedDisconnection = false;
+  });
 
-// Contador de timeouts de lectura consecutivos para detectar apagado total
+  socket.on('error', (err: NodeJS.ErrnoException) => {
+    isConnecting = false;
+    console.error('Modbus Socket Error:', err.message);
+    inverterData.connected = false;
+
+    if (!hasAlertedDisconnection && isTelegramEnabled()) {
+      alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
+      hasAlertedDisconnection = true;
+    }
+  });
+
+  socket.on('close', () => {
+    console.log('Modbus Connection Closed');
+    inverterData.connected = false;
+
+    if (!hasAlertedDisconnection && isTelegramEnabled()) {
+      alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
+      hasAlertedDisconnection = true;
+    }
+
+    modbusConsecutiveConnectionFailures += 1;
+    if (
+      MODBUS_PORTS.length > 1
+      && modbusConsecutiveConnectionFailures >= MODBUS_PORT_ROTATE_THRESHOLD
+    ) {
+      modbusPortIndex = (modbusPortIndex + 1) % MODBUS_PORTS.length;
+      modbusConsecutiveConnectionFailures = 0;
+      console.warn(`Rotating Modbus port after persistent connection failures. Next port: ${currentModbusPort()}`);
+    }
+
+    setTimeout(() => {
+      if (!inverterData.connected) {
+        connectModbus();
+      }
+    }, MODBUS_RECONNECT_DELAY_MS);
+  });
+}
+
+let pvStatusRegistersAvailable = false;
+let firstTelemetrySyncLogged = false;
 let consecutiveModbusTimeouts = 0;
 
 function monitorPvStatus() {
-  // Only monitor if we've successfully read these registers at least once
   if (!pvStatusRegistersAvailable) return;
 
-  // Check if PV connection status changed (automatic disconnect detected)
   if (inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
     pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
 
     if (!inverterData.pvConnectionStatus && !hasAlertedPvDisconnection) {
-      // PV went from connected to disconnected
       console.error('🔴 PV CONNECTION LOST - Automatico has tripped!');
       alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
       hasAlertedPvDisconnection = true;
     } else if (inverterData.pvConnectionStatus && hasAlertedPvDisconnection) {
-      // PV reconnected
       console.log('🟢 PV CONNECTION RESTORED');
       alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
       hasAlertedPvDisconnection = false;
     }
   }
 
-  // Check if PV String Loss alarm changed
   if (inverterData.pvStringLossAlarm !== pvStringLossAlarmPrevious) {
     pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
 
     if (inverterData.pvStringLossAlarm && !hasAlertedPvStringLoss) {
-      // String loss alarm triggered
       console.error('🔴 PV STRING LOSS DETECTED - Alarm ID: 2015');
       alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
       hasAlertedPvStringLoss = true;
     } else if (!inverterData.pvStringLossAlarm && hasAlertedPvStringLoss) {
-      // String loss alarm cleared
       console.log('🟢 PV STRING LOSS CLEARED');
       hasAlertedPvStringLoss = false;
     }
@@ -1688,7 +1591,7 @@ function monitorPvStatus() {
 }
 
 async function pollInverter() {
-  if (!inverterData.connected) return;
+  if (!inverterData.connected || !client) return;
 
   const sectionReadStatus = {
     pv: false,
@@ -1708,24 +1611,18 @@ async function pollInverter() {
       const snRes = await client.readHoldingRegisters(30015, 10);
       inverterData.serialNumber = u16ToStr(snRes.response.body.values);
 
-      // --- LOG DE CONFIRMACIÓN DE IDENTIDAD ---
       console.log(`📡 [MODBUS] Inverter Identity successfully read:`);
       console.log(`   Model:  ${inverterData.model}`);
       console.log(`   S/N:    ${inverterData.serialNumber}`);
-      // ----------------------------------------
-
     } catch (err) {
       console.warn('Modbus read failed (identity block):', err);
     }
   }
 
   try {
-    // BLOQUE 1: Datos de operación (32016 - 32116)
-    // Cubre: PV, Potencia Entrada, Voltaje Red, Frecuencia, Potencia Activa, Temperatura, Estado, Rendimiento
     const block1Res = await client.readHoldingRegisters(32016, 100);
     const regs1 = block1Res.response.body.values;
 
-    // Mapeo manual basado en offsets desde 32016
     inverterData.pv1Voltage = regs1[32016 - 32016] / 10;
     inverterData.pv1Current = regs1[32017 - 32016] / 100;
     inverterData.pv2Voltage = regs1[32018 - 32016] / 10;
@@ -1743,16 +1640,13 @@ async function pollInverter() {
 
     inverterData.temperature = regs1[32087 - 32016] / 10;
     inverterData.status = regs1[32089 - 32016];
-
     inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
   } catch (err) {
     console.warn('Modbus read failed (Operation Block):', err);
-    // --- PROTECCIÓN DE TIMEOUTS ---
     consecutiveModbusTimeouts++;
-    // Si falla 3 veces consecutivas, asumimos que el inversor está apagado del todo
-    if (consecutiveModbusTimeouts >= 3) {
+    if (consecutiveModbusTimeouts >= 3 && socket) {
       console.error('🔴 Persistent Modbus timeouts detected. Forcing socket disconnect...');
-      socket.destroy(); // Esto fuerza el cierre del socket TCP, disparando el evento 'close' e iniciando el envío de Telegram
+      socket.destroy();
       inverterData.connected = false;
       consecutiveModbusTimeouts = 0;
     }
@@ -1761,7 +1655,6 @@ async function pollInverter() {
   await delay(60);
 
   try {
-    // BLOQUE 2: Contador de Red (37113)
     const meterRes = await client.readHoldingRegisters(37113, 2);
     inverterData.gridPower = i32FromRegs(meterRes.response.body.values);
     sectionReadStatus.gridMeter = true;
@@ -1769,30 +1662,21 @@ async function pollInverter() {
     console.warn('Modbus read failed (Grid Meter):', err);
   }
 
-  // Read PV Connection Status (Register 32002 - State 2, Bit 1)
-  // and PV String Loss Alarm (Register 32010 - Alarm 3, Bit 6)
-  // Note: These registers may not be available on all inverter models
   await delay(60);
   try {
     const state2Res = await client.readHoldingRegisters(32002, 1);
     const state2Value = state2Res.response.body.values[0];
-    inverterData.pvConnectionStatus = Boolean((state2Value >> 1) & 1); // Bit 1
+    inverterData.pvConnectionStatus = Boolean((state2Value >> 1) & 1);
     pvStatusRegistersAvailable = true;
-  } catch (err) {
-    // Silently ignore if register not available - it's not critical
-    // inverterData.pvConnectionStatus remains at its previous value
-  }
+  } catch (err) {}
 
   await delay(60);
   try {
     const alarm3Res = await client.readHoldingRegisters(32010, 1);
     const alarm3Value = alarm3Res.response.body.values[0];
-    inverterData.pvStringLossAlarm = Boolean((alarm3Value >> 6) & 1); // Bit 6
+    inverterData.pvStringLossAlarm = Boolean((alarm3Value >> 6) & 1);
     pvStatusRegistersAvailable = true;
-  } catch (err) {
-    // Silently ignore if register not available - it's not critical
-    // inverterData.pvStringLossAlarm remains at its previous value
-  }
+  } catch (err) {}
 
   if (MODBUS_HAS_BATTERY) {
     await delay(60);
@@ -1838,7 +1722,6 @@ async function pollInverter() {
     return;
   }
 
-  // --- LOG DE EXITO INICIAL DE TELEMETRÍA ---
   if (!firstTelemetrySyncLogged) {
     firstTelemetrySyncLogged = true;
     console.log(`\n✅ [MODBUS] First successful telemetry sync completed:`);
@@ -1849,7 +1732,6 @@ async function pollInverter() {
     console.log(`   PV Conn. State:     ${inverterData.pvConnectionStatus ? 'Connected (1)' : 'Disconnected (0)'}`);
     console.log(`   PV String Alarm:    ${inverterData.pvStringLossAlarm ? 'Active (1)' : 'Inactive (0)'}\n`);
   }
-  // ------------------------------------------
 
   const today = new Date().toISOString().split('T')[0];
   const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
@@ -1863,21 +1745,19 @@ async function pollInverter() {
   }) + '\n';
 
   fs.appendFile(logFile, logEntry, (err) => {
-    if (err) {
-      console.error('Error saving to history:', err);
-    }
+    if (err) console.error('Error saving to history:', err);
   });
 
-  // Persist to InfluxDB
   writeToInflux(inverterData);
 }
 
-const ocppHttpServer = createServer((req, res) => {
+// 3. Inicialización condicional del Servidor OCPP (Solo cargador o monolito)
+const ocppHttpServer = isCharger ? createServer((req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Use WebSocket OCPP endpoint.' }));
-});
+}) : null;
 
-const ocppWss = new WebSocketServer({
+const ocppWss = ocppHttpServer ? new WebSocketServer({
   server: ocppHttpServer,
   handleProtocols: (protocols) => {
     if (protocols.has('ocpp1.6')) {
@@ -1885,285 +1765,295 @@ const ocppWss = new WebSocketServer({
     }
     return false;
   },
-});
+}) : null;
 
-ocppWss.on('connection', (ws, req) => {
-  const requestPath = req.url ?? '/';
-  if (!requestPath.startsWith(`${OCPP_PATH_PREFIX}/`)) {
-    console.warn(`Rejected OCPP path: ${requestPath}`);
-    ws.close(1008, 'Invalid OCPP path');
-    return;
-  }
-
-  const chargePointId = extractChargePointId(requestPath);
-
-  // If a previous socket is still open for this single-charger server, retire it.
-  if (chargerWs && chargerWs !== ws && chargerWs.readyState === chargerWs.OPEN) {
-    console.warn(`[${chargePointId}] Closing previous OCPP socket to keep a single active connection`);
-    chargerWs.close(1000, 'Replaced by newer connection');
-  }
-
-  chargerState.connected = true;
-  chargerState.chargePointId = chargePointId;
-  chargerState.lastUpdate = new Date().toISOString();
-  chargerWs = ws;
-  emitCombinedData();
-
-  console.log(`OCPP connection opened for ${chargePointId} (${req.socket.remoteAddress ?? 'unknown'})`);
-  // Always query full charger config on connect so we can see it in the live log.
-  sendOcppCall(ws, chargePointId, 'GetConfiguration', {}, 'full configuration snapshot on connect');
-  requestSmartChargingConfiguration(ws, chargePointId);
-  if (OCPP_SMART_PROBE_ON_CONNECT) {
-    console.log(`[${chargePointId}] [PROBE] Auto probe on connect is disabled to avoid overriding active charging limits`);
-  }
-  reconcileChargerControlState('WebSocketConnected');
-
-  ws.on('message', (raw) => {
-    // Ignore messages from stale sockets that are no longer the active charger connection.
-    if (ws !== chargerWs) {
+if (ocppWss) {
+  ocppWss.on('connection', (ws, req) => {
+    const requestPath = req.url ?? '/';
+    if (!requestPath.startsWith(`${OCPP_PATH_PREFIX}/`)) {
+      console.warn(`Rejected OCPP path: ${requestPath}`);
+      ws.close(1008, 'Invalid OCPP path');
       return;
     }
 
-    try {
-      const parsed = JSON.parse(raw.toString());
-      if (!Array.isArray(parsed) || parsed.length < 3) {
-        return;
-      }
+    const chargePointId = extractChargePointId(requestPath);
 
-      const messageType = parsed[0];
-
-      if (messageType === 2) {
-        // Call from charger
-        handleOcppCall(ws, chargePointId, parsed as OcppCall);
-      } else if (messageType === 3) {
-        // CallResult: charger responded to one of our commands
-        const uniqueId = String(parsed[1]);
-        const callResult = parsed[2];
-        const pending = consumePendingOcppCall(chargePointId, uniqueId);
-        if (pending) {
-          const elapsedMs = Date.now() - pending.sentAt;
-          console.log(
-            `[${chargePointId}] ← CallResult for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}] after ${elapsedMs}ms`,
-          );
-        }
-        if (callResult && Array.isArray(callResult.configurationKey)) {
-          logGetConfigurationResult(chargePointId, callResult as GetConfigurationResult);
-        } else {
-          console.log(`[${chargePointId}] ← CallResult:`, JSON.stringify(callResult, null, 2));
-        }
-      } else if (messageType === 4) {
-        // CallError: charger rejected one of our commands
-        const uniqueId = String(parsed[1]);
-        const pending = consumePendingOcppCall(chargePointId, uniqueId);
-        if (pending) {
-          console.warn(
-            `[${chargePointId}] ← CallError for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}]`,
-          );
-        }
-        console.warn(`[${chargePointId}] ← CallError:`, JSON.stringify(parsed, null, 2));
-      }
-    } catch (error) {
-      console.error(`[${chargePointId}] Could not parse OCPP frame`, error);
+    if (chargerWs && chargerWs !== ws && chargerWs.readyState === chargerWs.OPEN) {
+      console.warn(`[${chargePointId}] Closing previous OCPP socket to keep a single active connection`);
+      chargerWs.close(1000, 'Replaced by newer connection');
     }
+
+    chargerState.connected = true;
+    chargerState.chargePointId = chargePointId;
+    chargerState.lastUpdate = new Date().toISOString();
+    chargerWs = ws;
+    emitCombinedData();
+
+    console.log(`OCPP connection opened for ${chargePointId} (${req.socket.remoteAddress ?? 'unknown'})`);
+    sendOcppCall(ws, chargePointId, 'GetConfiguration', {}, 'full configuration snapshot on connect');
+    requestSmartChargingConfiguration(ws, chargePointId);
+    reconcileChargerControlState('WebSocketConnected');
+
+    ws.on('message', (raw) => {
+      if (ws !== chargerWs) return;
+      try {
+        const parsed = JSON.parse(raw.toString());
+        if (!Array.isArray(parsed) || parsed.length < 3) return;
+
+        const messageType = parsed[0];
+
+        if (messageType === 2) {
+          handleOcppCall(ws, chargePointId, parsed as OcppCall);
+        } else if (messageType === 3) {
+          const uniqueId = String(parsed[1]);
+          const callResult = parsed[2];
+          const pending = consumePendingOcppCall(chargePointId, uniqueId);
+          if (pending) {
+            const elapsedMs = Date.now() - pending.sentAt;
+            console.log(
+              `[${chargePointId}] ← CallResult for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}] after ${elapsedMs}ms`,
+            );
+          }
+          if (callResult && Array.isArray(callResult.configurationKey)) {
+            logGetConfigurationResult(chargePointId, callResult as GetConfigurationResult);
+          } else {
+            console.log(`[${chargePointId}] ← CallResult:`, JSON.stringify(callResult, null, 2));
+          }
+        } else if (messageType === 4) {
+          const uniqueId = String(parsed[1]);
+          const pending = consumePendingOcppCall(chargePointId, uniqueId);
+          if (pending) {
+            console.warn(
+              `[${chargePointId}] ← CallError for ${pending.action}${pending.note ? ` (${pending.note})` : ''} [id=${uniqueId}]`,
+            );
+          }
+          console.warn(`[${chargePointId}] ← CallError:`, JSON.stringify(parsed, null, 2));
+        }
+      } catch (error) {
+        console.error(`[${chargePointId}] Could not parse OCPP frame`, error);
+      }
+    });
+
+    ws.on('close', (code, reason) => {
+      console.log(`OCPP connection closed for ${chargePointId} (${code}) ${reason.toString()}`);
+      if (chargerWs === ws) {
+        chargerWs = null;
+        chargerState.connected = false;
+        chargerState.cableConnected = false;
+        chargerState.lastUpdate = new Date().toISOString();
+        emitCombinedData();
+        pendingOcppCallsByChargePoint.delete(chargePointId);
+      }
+    });
+
+    ws.on('error', (error) => {
+      console.error(`OCPP socket error for ${chargePointId}:`, error);
+    });
   });
+}
 
-  ws.on('close', (code, reason) => {
-    console.log(`OCPP connection closed for ${chargePointId} (${code}) ${reason.toString()}`);
+// 4. Configurar rutas de la REST API (Solo si existe 'app')
+if (app) {
+  app.use(express.json());
 
-    // Only clear shared charger state if this was the active socket.
-    if (chargerWs === ws) {
-      chargerWs = null;
-      chargerState.connected = false;
-      chargerState.cableConnected = false;
-      chargerState.lastUpdate = new Date().toISOString();
-      emitCombinedData();
-      pendingOcppCallsByChargePoint.delete(chargePointId);
+  app.post('/api/charger/start', (req, res) => {
+    const isDashboardRole = process.env.SERVICE_ROLE === 'dashboard';
+    if (!canSendToCharger()) {
+      res.status(503).json({ error: 'Charger not connected' });
+      return;
     }
+    chargerState.startRequested = true;
+    chargerState.lastUpdate = new Date().toISOString();
+
+    if (isDashboardRole) {
+      syncChargerIntoInverterData();
+      saveLiveState();
+      console.log(`[API] Charger START requested (Armed in shared state)`);
+      res.json({ status: 'armed', mode: chargerState.chargingMode });
+      return;
+    }
+
+    if (chargerState.chargingMode === 'GREEN' || chargerState.chargingMode === 'HYBRID') {
+      reconcileChargerControlState('ApiStart');
+      res.json({
+        status: chargerState.status === 'Charging' ? 'sent' : 'armed',
+        mode: chargerState.chargingMode,
+        limitA: chargerState.appliedCurrentLimitA ?? null,
+      });
+      return;
+    }
+
+    if (chargerState.status === 'Unavailable') {
+      console.log('[API] Charger is Unavailable (controlled externally) — FAST start armed but not sent');
+      res.json({ status: 'armed', mode: chargerState.chargingMode, reason: 'charger_unavailable' });
+      return;
+    }
+
+    sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
+    sendRemoteStartTransaction();
+    res.json({ status: 'sent', mode: chargerState.chargingMode });
   });
 
-  ws.on('error', (error) => {
-    console.error(`OCPP socket error for ${chargePointId}:`, error);
+  app.post('/api/charger/stop', (req, res) => {
+    const isDashboardRole = process.env.SERVICE_ROLE === 'dashboard';
+    if (!canSendToCharger()) {
+      res.status(503).json({ error: 'Charger not connected' });
+      return;
+    }
+    pendingApiStopRequest = true;
+    chargerState.startRequested = false;
+    chargerState.appliedCurrentLimitA = undefined;
+    chargerState.lastRequestedCurrentLimitA = undefined;
+
+    if (isDashboardRole) {
+      syncChargerIntoInverterData();
+      saveLiveState();
+      console.log(`[API] Charger STOP requested (Armed in shared state)`);
+      res.json({ status: 'sent' });
+      return;
+    }
+
+    clearChargingLimit();
+
+    if (chargerState.status === 'Charging') {
+      sendRemoteStopTransaction();
+      res.json({ status: 'sent' });
+      return;
+    }
+
+    pendingApiStopRequest = false;
+    chargerState.lastUpdate = new Date().toISOString();
+    emitCombinedData();
+    res.json({ status: 'cancelled' });
   });
-});
 
+  app.post('/api/charger/mode', (req, res) => {
+    const isDashboardRole = process.env.SERVICE_ROLE === 'dashboard';
+    const modeRaw = String(req.body?.mode ?? '').toUpperCase();
+    if (modeRaw !== 'FAST' && modeRaw !== 'GREEN' && modeRaw !== 'HYBRID') {
+      res.status(400).json({ error: 'Invalid mode. Use FAST, GREEN or HYBRID.' });
+      return;
+    }
 
-// REST API: charger control
-app.use(express.json());
+    const mode = modeRaw as ChargingMode;
+    chargerState.chargingMode = mode;
+    chargerState.lastUpdate = new Date().toISOString();
 
-app.post('/api/charger/start', (req, res) => {
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
+    if (isDashboardRole) {
+      syncChargerIntoInverterData(); // Corregido: Sincronización previa para persistencia correcta
+      saveLiveState();
+    } else if (mode === 'FAST') {
+      clearChargingLimit();
+    } else {
+      reconcileChargerControlState('ApiModeChange');
+    }
 
-  if (!canSendToCharger()) {
-    res.status(503).json({ error: 'Charger not connected' });
-    return;
-  }
-
-  chargerState.startRequested = true;
-  chargerState.lastUpdate = new Date().toISOString();
-
-  if (isDashboard) {
-    syncChargerIntoInverterData();
-    saveLiveState();
-    console.log(`[API] Charger START requested (Armed in shared state)`);
-    res.json({ status: 'armed', mode: chargerState.chargingMode });
-    return;
-  }
-
-  if (chargerState.chargingMode === 'GREEN' || chargerState.chargingMode === 'HYBRID') {
-    reconcileChargerControlState('ApiStart');
+    emitCombinedData();
+    console.log(`[API] Charger mode changed to ${mode}`);
     res.json({
-      status: chargerState.status === 'Charging' ? 'sent' : 'armed',
+      status: 'ok',
       mode: chargerState.chargingMode,
       limitA: chargerState.appliedCurrentLimitA ?? null,
     });
-    return;
-  }
-
-  if (chargerState.status === 'Unavailable') {
-    console.log('[API] Charger is Unavailable (controlled externally) — FAST start armed but not sent');
-    res.json({ status: 'armed', mode: chargerState.chargingMode, reason: 'charger_unavailable' });
-    return;
-  }
-
-  sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
-  sendRemoteStartTransaction();
-  res.json({ status: 'sent', mode: chargerState.chargingMode });
-});
-
-app.post('/api/charger/stop', (req, res) => {
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-
-  if (!canSendToCharger()) {
-    res.status(503).json({ error: 'Charger not connected' });
-    return;
-  }
-
-  pendingApiStopRequest = true;
-  chargerState.startRequested = false;
-  chargerState.appliedCurrentLimitA = undefined;
-  chargerState.lastRequestedCurrentLimitA = undefined;
-
-  if (isDashboard) {
-    syncChargerIntoInverterData();
-    saveLiveState();
-    console.log(`[API] Charger STOP requested (Armed in shared state)`);
-    res.json({ status: 'sent' });
-    return;
-  }
-
-  clearChargingLimit();
-
-  if (chargerState.status === 'Charging') {
-    sendRemoteStopTransaction();
-    res.json({ status: 'sent' });
-    return;
-  }
-
-  pendingApiStopRequest = false;
-  chargerState.lastUpdate = new Date().toISOString();
-  emitCombinedData();
-  res.json({ status: 'cancelled' });
-});
-
-app.post('/api/charger/mode', (req, res) => {
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-  const modeRaw = String(req.body?.mode ?? '').toUpperCase();
-  if (modeRaw !== 'FAST' && modeRaw !== 'GREEN' && modeRaw !== 'HYBRID') {
-    res.status(400).json({ error: 'Invalid mode. Use FAST, GREEN or HYBRID.' });
-    return;
-  }
-
-  const mode = modeRaw as ChargingMode;
-  chargerState.chargingMode = mode;
-  chargerState.lastUpdate = new Date().toISOString();
-
-  if (isDashboard) {
-    saveLiveState();
-  } else if (mode === 'FAST') {
-    clearChargingLimit();
-  } else {
-    reconcileChargerControlState('ApiModeChange');
-  }
-
-  emitCombinedData();
-  console.log(`[API] Charger mode changed to ${mode}`);
-  res.json({
-    status: 'ok',
-    mode: chargerState.chargingMode,
-    limitA: chargerState.appliedCurrentLimitA ?? null,
   });
-});
 
-app.post('/api/charger/probe-smart', (req, res) => {
-  if (!canSendToCharger() || !chargerWs) {
-    res.status(503).json({ error: 'Charger not connected' });
-    return;
-  }
-
-  const stackLevel = Number(req.body?.stackLevel ?? OCPP_SMART_PROBE_STACK_LEVEL);
-  const cpMaxA = Number(req.body?.cpMaxA ?? OCPP_SMART_PROBE_CP_MAX_AMPS);
-  const txA = Number(req.body?.txA ?? OCPP_SMART_PROBE_TX_AMPS);
-  const cpMaxW = Number(req.body?.cpMaxW ?? OCPP_SMART_PROBE_CP_MAX_WATTS);
-  const txW = Number(req.body?.txW ?? OCPP_SMART_PROBE_TX_WATTS);
-  const chargePointId = chargerState.chargePointId || 'CP?';
-
-  requestSmartChargingConfiguration(chargerWs, chargePointId);
-  sendSetChargingProfileProbe(chargerWs, chargePointId, 'ChargePointMaxProfile', cpMaxA, cpMaxW, stackLevel);
-  if (chargerState.transactionId !== undefined) {
-    sendSetChargingProfileProbe(
-      chargerWs,
-      chargePointId,
-      'TxProfile',
-      txA,
-      txW,
-      stackLevel,
-      chargerState.transactionId,
-    );
-  }
-
-  res.json({
-    status: 'sent',
-    chargePointId,
-    stackLevel,
-    preferredRateUnit: getPreferredProbeRateUnit(chargePointId),
-    cpMaxA,
-    txA,
-    cpMaxW,
-    txW,
-    txId: chargerState.transactionId ?? null,
-  });
-});
-
-// The smart loop is now started within startChargerService to ensure
-// it only runs where the charger connection exists.
-
-app.get('/api/logs/live', (req, res) => {
-  res.json(liveLogs);
-});
-
-app.get('/api/logs/:date', (req, res) => {
-  const filePath = path.join(LOGS_DIR, `${req.params.date}.jsonl`);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Logs not found for this date' });
-  }
-
-  fs.readFile(filePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).json({ error: 'Error reading logs' });
-
-    try {
-      const records = data
-        .trim()
-        .split('\n')
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line));
-      res.json(records);
-    } catch (error) {
-      res.status(500).json({ error: 'Corrupt log file' });
+  app.post('/api/charger/probe-smart', (req, res) => {
+    if (!canSendToCharger() || !chargerWs) {
+      res.status(503).json({ error: 'Charger not connected' });
+      return;
     }
-  });
-});
 
-  // Stats API
+    const stackLevel = Number(req.body?.stackLevel ?? OCPP_SMART_PROBE_STACK_LEVEL);
+    const cpMaxA = Number(req.body?.cpMaxA ?? OCPP_SMART_PROBE_CP_MAX_AMPS);
+    const txA = Number(req.body?.txA ?? OCPP_SMART_PROBE_TX_AMPS);
+    const cpMaxW = Number(req.body?.cpMaxW ?? OCPP_SMART_PROBE_CP_MAX_WATTS);
+    const txW = Number(req.body?.txW ?? OCPP_SMART_PROBE_TX_WATTS);
+    const chargePointId = chargerState.chargePointId || 'CP?';
+
+    requestSmartChargingConfiguration(chargerWs, chargePointId);
+    sendSetChargingProfileProbe(chargerWs, chargePointId, 'ChargePointMaxProfile', cpMaxA, cpMaxW, stackLevel);
+    if (chargerState.transactionId !== undefined) {
+      sendSetChargingProfileProbe(
+        chargerWs,
+        chargePointId,
+        'TxProfile',
+        txA,
+        txW,
+        stackLevel,
+        chargerState.transactionId,
+      );
+    }
+
+    res.json({
+      status: 'sent',
+      chargePointId,
+      stackLevel,
+      preferredRateUnit: getPreferredProbeRateUnit(chargePointId),
+      cpMaxA,
+      txA,
+      cpMaxW,
+      txW,
+      txId: chargerState.transactionId ?? null,
+    });
+  });
+
+  app.get('/api/logs/live', (req, res) => {
+    res.json(liveLogs);
+  });
+
+  app.get('/api/logs/:date', (req, res) => {
+    const filePath = path.join(LOGS_DIR, `${req.params.date}.jsonl`);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Logs not found for this date' });
+    }
+
+    fs.readFile(filePath, 'utf8', (err, data) => {
+      if (err) return res.status(500).json({ error: 'Error reading logs' });
+      try {
+        const records = data
+          .trim()
+          .split('\n')
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line));
+        res.json(records);
+      } catch (error) {
+        res.status(500).json({ error: 'Corrupt log file' });
+      }
+    });
+  });
+
+  app.get('/api/history/list', (req, res) => {
+    fs.readdir(HISTORY_DIR, (err, files) => {
+      if (err) return res.status(500).json({ error: 'Could not list history' });
+      const days = files
+        .filter(f => f.endsWith('.jsonl'))
+        .map(f => f.replace('.jsonl', ''))
+        .sort((a, b) => b.localeCompare(a));
+      res.json(days);
+    });
+  });
+
+  app.get('/api/history/:date', (req, res) => {
+    const filePath = path.join(HISTORY_DIR, `${req.params.date}.jsonl`);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'History not found for this date' });
+    }
+
+    fs.readFile(filePath, 'utf8', (err, data) => {
+      if (err) return res.status(500).json({ error: 'Error reading history' });
+      try {
+        const records = data
+          .trim()
+          .split('\n')
+          .filter(line => line.length > 0)
+          .map(line => JSON.parse(line));
+        res.json(records);
+      } catch (e) {
+        res.status(500).json({ error: 'Corrupt history file' });
+      }
+    });
+  });
+
   app.get('/api/stats/summary', async (req, res) => {
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -2174,35 +2064,142 @@ app.get('/api/logs/:date', (req, res) => {
     }
   });
 
-  app.get('/api/history/list', (req, res) => {
+  app.get('/api/stats/:period', async (req, res) => {
+    const { period } = req.params;
+    const { date, month, year } = req.query;
+
+    let start, stop;
+
+    if (period === 'day') {
+      const stats = await calculateStatsForDate(date as string);
+      return res.json(stats);
+    } else if (period === 'month') {
+      start = `${year}-${String(month).padStart(2, '0')}-01T00:00:00Z`;
+      const nextMonth = Number(month) === 12 ? 1 : Number(month) + 1;
+      const nextYear = Number(month) === 12 ? Number(year) + 1 : Number(year);
+      stop = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01T00:00:00Z`;
+    } else if (period === 'year') {
+      start = `${year}-01-01T00:00:00Z`;
+      stop = `${Number(year) + 1}-01-01T00:00:00Z`;
+    } else {
+      return res.status(400).json({ error: 'Invalid period' });
+    }
+
     try {
-      const files = fs.readdirSync(HISTORY_DIR)
-        .filter(f => f.endsWith('.jsonl'))
-        .map(f => f.replace('.jsonl', ''))
-        .sort((a, b) => b.localeCompare(a));
-      res.json(files);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to list history' });
+      const stats = await queryInfluxStats(start, stop);
+      res.json(stats || { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
+    } catch (err) {
+      console.warn(`[WARN] Stats query failed (likely no data for this period):`, err.message);
+      res.json({ production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
     }
   });
+}
 
+// 5. Arranque de los watchers de logs (Solo Dashboard)
+if (isDashboard) {
   startLogWatcher();
+  rotateCombinedLogIfNeeded();
+  setInterval(rotateCombinedLogIfNeeded, 3600000);
+}
 
-// Rotate combined logs every hour or when size threshold is reached
-rotateCombinedLogIfNeeded();
-setInterval(rotateCombinedLogIfNeeded, 3600000); // Check every hour (3600000 ms)
+// Inicializar funciones auxiliares de InfluxDB
+async function queryInfluxStats(rangeStart: string, rangeStop: string) {
+  if (!influxClient) return null;
+  const queryApi = influxClient.getQueryApi(INFLUX_ORG);
 
-// Export functions for modular services
+  const fluxQuery = `
+    import "math"
+    from(bucket: "${INFLUX_BUCKET}")
+      |> range(start: ${rangeStart}, stop: ${rangeStop})
+      |> filter(fn: (r) => r["_field"] == "inputPower" or r["_field"] == "consumption" or r["_field"] == "gridPower")
+      |> integral(unit: 1h)
+      |> pivot(rowKey:["_start"], columnKey: ["_field"], valueColumn: "_value")
+  `;
+
+  return new Promise((resolve, reject) => {
+    let result = { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
+    queryApi.queryRows(fluxQuery, {
+      next(row, tableMeta) {
+        const o = tableMeta.toObject(row);
+        const prod = (o.inputPower ?? 0);
+        const cons = (o.consumption ?? 0);
+        const grid = (o.gridPower ?? 0);
+
+        result.production = prod / 1000;
+        result.consumption = cons / 1000;
+        result.export = grid > 0 ? grid / 1000 : 0;
+        result.import = grid < 0 ? Math.abs(grid) / 1000 : 0;
+        result.selfConsumption = Math.max(0, result.production - result.export);
+      },
+      error(error) { reject(error); },
+      complete() { resolve(result); },
+    });
+  });
+}
+
+async function calculateStatsForDate(date: string) {
+  const filePath = path.join(HISTORY_DIR, `${date}.jsonl`);
+  if (!fs.existsSync(filePath)) {
+    return { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter(Boolean);
+
+  let totalProduction = 0;
+  let totalConsumption = 0;
+  let totalExport = 0;
+  let totalImport = 0;
+  let lastTime: number | null = null;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      const currentTime = new Date(entry.time).getTime();
+
+      if (lastTime !== null) {
+        const deltaHours = (currentTime - lastTime) / (1000 * 3600);
+
+        totalProduction += (entry.inputPower ?? 0) * deltaHours;
+        totalConsumption += (entry.consumption ?? 0) * deltaHours;
+
+        const gridPower = entry.gridPower ?? 0;
+        if (gridPower > 0) {
+          totalExport += gridPower * deltaHours;
+        } else {
+          totalImport += Math.abs(gridPower) * deltaHours;
+        }
+      }
+      lastTime = currentTime;
+    } catch (e) {
+      continue;
+    }
+  }
+
+  const prodKwh = totalProduction / 1000;
+  const consKwh = totalConsumption / 1000;
+  const exportKwh = totalExport / 1000;
+  const importKwh = totalImport / 1000;
+  const selfConsumptionKwh = Math.max(0, prodKwh - exportKwh);
+
+  return {
+    production: prodKwh,
+    consumption: consKwh,
+    export: exportKwh,
+    import: importKwh,
+    selfConsumption: selfConsumptionKwh
+  };
+}
+
+// 6. Funciones de arranque de los microservicios
 export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
 
-  // Imprimir plan de monitoreo en formato tabla ASCII
   console.log('\n📊 [MODBUS MONITORING PLAN]');
   console.log('----------------------------------------------------------------------');
   console.log(' ADDR.REG | LEN | PARAMETER DESCRIPTION                | CONVERSION');
   console.log('----------------------------------------------------------------------');
   MODBUS_REGISTRY_MAP.forEach(reg => {
-    // Si la batería está desactivada en las variables de entorno, no mostramos sus registros
     if (!MODBUS_HAS_BATTERY && (reg.address === 37001 || reg.address === 37004)) {
       return;
     }
@@ -2214,7 +2211,6 @@ export async function startInverterService() {
   });
   console.log('----------------------------------------------------------------------\n');
 
-  // In modular mode, we need to sync with other services (like the charger)
   if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
     console.log('[INIT] Modular mode detected, starting live-state polling for inverter service');
     setInterval(loadLiveState, 1000);
@@ -2224,7 +2220,6 @@ export async function startInverterService() {
   connectModbus();
   setInterval(pollInverter, 1000);
 
-  // Health heartbeat
   setInterval(() => {
     const status = inverterData.connected ? 'OK' : 'Error (Disconnected)';
     const details = inverterData.connected ? `Polling at ${currentModbusPort()}` : 'Modbus connection failed';
@@ -2235,53 +2230,53 @@ export async function startInverterService() {
 export async function startChargerService() {
   console.log('🚀 Starting Charger Service (OCPP)...');
 
-  // In modular mode, we need to restore state and sync with the inverter service
   if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
     console.log('[INIT] Modular mode detected, restoring charger state and starting live-state polling');
     restorePersistedChargerState();
+    loadLiveState();
     setInterval(loadLiveState, 1000);
   }
 
-  // Start the smart charging loop here
   setInterval(() => {
     applySmartChargingPolicy();
   }, GREEN_CONTROL_LOOP_MS);
 
-  // Health heartbeat
   setInterval(() => {
     const status = chargerState.connected ? 'OK' : 'Disconnected';
     const details = chargerState.connected ? `CP: ${chargerState.chargePointId}` : 'Waiting for connection';
     updateServiceHeartbeat(status, details);
   }, 10000);
 
-  ocppHttpServer.on('error', (error) => {
-    console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
-  });
-  ocppHttpServer.listen(OCPP_PORT, OCPP_HOST, () => {
-    console.log(`OCPP server listening on ws://${OCPP_HOST}:${OCPP_PORT}${OCPP_PATH_PREFIX}/<chargePointId>`);
-  });
+  if (ocppHttpServer) {
+    ocppHttpServer.on('error', (error) => {
+      console.error(`OCPP server failed on ${OCPP_HOST}:${OCPP_PORT}`, error);
+    });
+    ocppHttpServer.listen(OCPP_PORT, OCPP_HOST, () => {
+      console.log(`OCPP server listening on ws://${OCPP_HOST}:${OCPP_PORT}${OCPP_PATH_PREFIX}/<chargePointId>`);
+    });
+  }
 }
 
 export async function startDashboardService() {
   console.log('🚀 Starting Dashboard Service (API + UI)...');
 
-  // In modular mode, we need to poll the state file
   if (process.env.SERVICE_ROLE === 'dashboard') {
+    loadLiveState();
     setInterval(loadLiveState, 1000);
 
-    // Health heartbeat
     setInterval(() => {
-      updateServiceHeartbeat('OK', `Clients: ${io.engine.clientsCount}`);
+      if (io) {
+        updateServiceHeartbeat('OK', `Clients: ${io.engine.clientsCount}`);
+      }
     }, 10000);
   }
 
   await startServer();
 }
 
-
-
 async function startServer() {
-  // Vite middleware for development
+  if (!app || !httpServer) return;
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: {
@@ -2309,7 +2304,6 @@ async function startServer() {
       }
     });
   }
-  startLogWatcher();
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Dashboard API listening on port ${PORT}`);
@@ -2317,211 +2311,13 @@ async function startServer() {
   });
 }
 
-function saveChargerState() {
-  const isDashboard = process.env.SERVICE_ROLE === 'dashboard';
-  const isCharger = process.env.SERVICE_ROLE === 'charger';
-  const isMonolith = process.env.START_MONOLITH === 'true';
-
-  if (isMonolith || isCharger) {
-    try {
-      fs.writeFileSync(CHARGER_STATE_FILE, JSON.stringify(chargerState, null, 2));
-    } catch (err) {
-      originalConsole.error('Error saving charger state:', err);
-    }
-  }
-
-  // In modular mode, we also update the shared live state
-  if (!isMonolith) {
-    if (isCharger || isDashboard) {
-      syncChargerIntoInverterData();
-      saveLiveState();
-    }
-  }
-}
-
-// History API
-app.get('/api/history/list', (req, res) => {
-  fs.readdir(HISTORY_DIR, (err, files) => {
-    if (err) return res.status(500).json({ error: 'Could not list history' });
-    const days = files
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => f.replace('.jsonl', ''))
-      .sort((a, b) => b.localeCompare(a));
-    res.json(days);
-  });
-});
-
-app.get('/api/stats/summary', async (req, res) => {
-  if (!influxClient) return res.status(503).json({ error: 'InfluxDB not configured' });
-
-  try {
-    const queryApi = influxClient.getQueryApi(INFLUX_ORG);
-
-    // Consulta para totales de hoy, mes y año
-    // Nota: Esto es un ejemplo simplificado, se puede expandir
-    const today = new Date().toISOString().split('T')[0];
-    const stats = await calculateStatsForDate(today);
-    res.json(stats);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch summary stats' });
-  }
-});
-
-app.get('/api/history/:date', (req, res) => {
-  const filePath = path.join(HISTORY_DIR, `${req.params.date}.jsonl`);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'History not found for this date' });
-  }
-
-  fs.readFile(filePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).json({ error: 'Error reading history' });
-    try {
-      const records = data
-        .trim()
-        .split('\n')
-        .filter(line => line.length > 0)
-        .map(line => JSON.parse(line));
-      res.json(records);
-    } catch (e) {
-      res.status(500).json({ error: 'Corrupt history file' });
-    }
-  });
-});
-
-async function queryInfluxStats(rangeStart: string, rangeStop: string) {
-  if (!influxClient) return null;
-  const queryApi = influxClient.getQueryApi(INFLUX_ORG);
-
-  // Usamos integral para calcular Wh (vatios-hora) de forma precisa
-  // Dividimos por 3600 porque la integral de W sobre segundos da Ws, y queremos Wh
-  const fluxQuery = `
-    import "math"
-    from(bucket: "${INFLUX_BUCKET}")
-      |> range(start: ${rangeStart}, stop: ${rangeStop})
-      |> filter(fn: (r) => r["_field"] == "inputPower" or r["_field"] == "consumption" or r["_field"] == "gridPower")
-      |> integral(unit: 1h)
-      |> pivot(rowKey:["_start"], columnKey: ["_field"], valueColumn: "_value")
-  `;
-
-  return new Promise((resolve, reject) => {
-    let result = { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
-    queryApi.queryRows(fluxQuery, {
-      next(row, tableMeta) {
-        const o = tableMeta.toObject(row);
-        const prod = (o.inputPower ?? 0);
-        const cons = (o.consumption ?? 0);
-        const grid = (o.gridPower ?? 0); // Esto es la integral de gridPower en Wh
-
-        // El problema es que la integral de gridPower mezcla export e import.
-        // Para mayor precisión, InfluxDB debería hacerlo antes de la integral.
-        // Pero para un resumen rápido, esto nos da una idea.
-        result.production = prod / 1000;
-        result.consumption = cons / 1000;
-        // Nota: El balance de red es complejo de integrar separado,
-        // usaremos el valor neto por ahora para desbloquear la UI.
-        result.export = grid > 0 ? grid / 1000 : 0;
-        result.import = grid < 0 ? Math.abs(grid) / 1000 : 0;
-        result.selfConsumption = Math.max(0, result.production - result.export);
-      },
-      error(error) { reject(error); },
-      complete() { resolve(result); },
-    });
-  });
-}
-
-app.get('/api/stats/:period', async (req, res) => {
-  const { period } = req.params;
-  const { date, month, year } = req.query;
-
-  let start, stop;
-
-  if (period === 'day') {
-    const stats = await calculateStatsForDate(date as string);
-    return res.json(stats);
-  } else if (period === 'month') {
-    start = `${year}-${String(month).padStart(2, '0')}-01T00:00:00Z`;
-    const nextMonth = Number(month) === 12 ? 1 : Number(month) + 1;
-    const nextYear = Number(month) === 12 ? Number(year) + 1 : Number(year);
-    stop = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01T00:00:00Z`;
-  } else if (period === 'year') {
-    start = `${year}-01-01T00:00:00Z`;
-    stop = `${Number(year) + 1}-01-01T00:00:00Z`;
-  } else {
-    return res.status(400).json({ error: 'Invalid period' });
-  }
-
-  try {
-    const stats = await queryInfluxStats(start, stop);
-    res.json(stats || { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
-  } catch (err) {
-    console.warn(`[WARN] Stats query failed (likely no data for this period):`, err.message);
-    res.json({ production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 });
-  }
-});
-async function calculateStatsForDate(date: string) {
-  const filePath = path.join(HISTORY_DIR, `${date}.jsonl`);
-  if (!fs.existsSync(filePath)) {
-    return { production: 0, consumption: 0, export: 0, import: 0, selfConsumption: 0 };
-  }
-
-  const content = fs.readFileSync(filePath, 'utf8');
-  const lines = content.split('\n').filter(Boolean);
-
-  let totalProduction = 0; // Wh
-  let totalConsumption = 0; // Wh
-  let totalExport = 0; // Wh
-  let totalImport = 0; // Wh
-  let lastTime: number | null = null;
-
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      const currentTime = new Date(entry.time).getTime();
-
-      if (lastTime !== null) {
-        const deltaHours = (currentTime - lastTime) / (1000 * 3600);
-
-        // Sumamos vatios-hora (Wh) usando las claves correctas del historial
-        totalProduction += (entry.inputPower ?? 0) * deltaHours;
-        totalConsumption += (entry.consumption ?? 0) * deltaHours;
-
-        const gridPower = entry.gridPower ?? 0;
-        if (gridPower > 0) {
-          totalExport += gridPower * deltaHours;
-        } else {
-          totalImport += Math.abs(gridPower) * deltaHours;
-        }
-      }
-
-      lastTime = currentTime;
-    } catch (e) {
-      continue;
-    }
-  }
-
-  const prodKwh = totalProduction / 1000;
-  const consKwh = totalConsumption / 1000;
-  const exportKwh = totalExport / 1000;
-  const importKwh = totalImport / 1000;
-  const selfConsumptionKwh = Math.max(0, prodKwh - exportKwh);
-
-  return {
-    production: prodKwh,
-    consumption: consKwh,
-    export: exportKwh,
-    import: importKwh,
-    selfConsumption: selfConsumptionKwh
-  };
-}
-
-// Auto-start if run directly (Monolith mode)
+// 7. Auto-start si se ejecuta directamente como Monolito
 if (process.env.START_MONOLITH === 'true' || process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js')) {
   console.log('🏛 Running in MONOLITH mode...');
   restorePersistedChargerState();
   syncChargerIntoInverterData();
   persistChargerStateIfChanged(true);
 
-  // Start all services
   startInverterService();
   startChargerService();
   startDashboardService();
