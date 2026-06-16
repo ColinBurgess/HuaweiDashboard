@@ -5,11 +5,14 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm install
+# Install pnpm
+RUN npm install -g pnpm
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN npm run build
+RUN pnpm run build
 
 
 # ==========================================
@@ -19,8 +22,11 @@ FROM node:20-slim
 
 WORKDIR /app
 
+# Install pnpm in final image
+RUN npm install -g pnpm
+
 # Copiar manifiestos de dependencias
-COPY package*.json ./
+COPY package.json pnpm-lock.yaml ./
 
 # Copiar dependencias y directorios compilados
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
@@ -38,4 +44,4 @@ USER node
 
 EXPOSE 3001 9100
 
-CMD ["npm", "start"]
+CMD ["pnpm", "start"]

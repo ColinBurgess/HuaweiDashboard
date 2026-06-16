@@ -15,6 +15,10 @@ storage/
 .git/
 .env
 
+# Package manager lock files (keep pnpm-lock.yaml)
+package-lock.json
+yarn.lock
+
 # Archivos de configuración de Docker que no se necesitan dentro del contenedor
 Dockerfile
 docker-compose.yml
