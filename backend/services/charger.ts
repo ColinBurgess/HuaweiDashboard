@@ -1,2 +1,2 @@
-import { startChargerService } from '../server.js';
+import { startChargerService } from './ocpp-charger.js';
 startChargerService();

@@ -198,15 +198,18 @@ Este script enviará todas las alertas disponibles a tu Telegram para verificar 
 pnpm run dev
 ```
 
-Esto arranca el backend principal desde `server.ts`, incluyendo:
+Esto arranca el backend desde `server.ts`, que orquesta los servicios modulares:
 
-- frontend servido por Vite en modo middleware,
-- API HTTP,
-- Socket.io,
-- servidor OCPP,
-- polling Modbus.
+- **Monolito** (por defecto): Todos los servicios en un solo proceso
+- **Modular** (con `SERVICE_ROLE`): Cada servicio independiente
 
-Endpoints principales mientras está en marcha:
+En monolito, el inicio incluye:
+- Polling Modbus del inversor
+- Servidor OCPP 1.6
+- API HTTP con Socket.io
+- Frontend servido por Vite en modo middleware
+
+Endpoints principales:
 
 - Dashboard: `http://localhost:3001`
 - OCPP: `ws://0.0.0.0:9100/ocpp/<chargePointId>`
@@ -430,26 +433,37 @@ Los últimos 250 logs se mantienen en memoria y además se emiten en tiempo real
 ## Estructura actual del proyecto
 
 ```text
-Agents.md            Guía de contexto para asistentes de IA (Arquitectura/IPC/Roles)
-server.ts            Núcleo del sistema: Lógica compartida, API y Monolito
-services/            Entry points para modo modular (inverter, charger, dashboard)
-ocpp_server.ts       Script auxiliar relacionado con OCPP
-diag_charger.ts      Herramienta auxiliar de diagnóstico
-scan_charger.ts      Herramienta auxiliar de descubrimiento/prueba
-scan_devices.ts      Herramienta auxiliar de red/dispositivos
-src/
-  App.tsx            Frontend principal React (Dashboard + Logs + Stats)
-  main.tsx           Entrada del frontend
-  index.css          Estilos globales (Premium Dark Mode)
-  lib/utils.ts       Utilidades frontend
+Agents.md                    Guía de contexto para asistentes de IA (Arquitectura/IPC/Roles)
+backend/
+  server.ts                  Punto de entrada principal: orquestador de servicios
+  config/
+    constants.ts             Constantes y configuración centralizada
+  ipc/
+    state-manager.ts         Gestor de estado compartido y persistencia (IPC)
+  services/
+    inverter-collector.ts    Polling Modbus y histórico de telemetría
+    ocpp-charger.ts          Servidor OCPP 1.6 para control EV
+    ui-api.ts                API HTTP + Socket.io + Interfaz web
+    telegram.ts              Alertas por Telegram
+  utils/
+    converters.ts            Conversión de registros Modbus
+    stats.ts                 Cálculo de estadísticas e InfluxDB
+  scripts/
+    migrate_history.ts       Utilidad de migración de histórico
+    test_telegram_alerts.ts  Script de test de Telegram (documentado en README)
+frontend/
+  App.tsx                    Dashboard principal React
+  main.tsx                   Entrada del frontend
+  index.css                  Estilos globales
+  lib/utils.ts               Utilidades frontend
 storage/
-  history/           Histórico diario JSONL
-  logs/              Logs de sesión y combined.jsonl
-  data/              Estado persistido y Live State compartido (IPC)
-dist/                Bundle frontend generado por Vite
-Dockerfile           Build multietapa con verificación de tipos
-docker-compose.yml   Orquestación con soporte de perfiles
-.env.example         Configuración base mínima
+  history/                   Histórico diario JSONL
+  logs/                      Logs de sesión + combined.jsonl
+  data/                      Estado persistido + Live State (IPC)
+dist/                        Bundle frontend (generado por Vite)
+Dockerfile                   Build multietapa con verificación de tipos
+docker-compose.yml           Orquestación con soporte de perfiles
+.env.example                 Configuración base mínima
 ```
 
 ## Scripts disponibles

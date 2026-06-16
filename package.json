@@ -5,15 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx backend/server.ts",
-    "ocpp:dev": "tsx backend/scripts/ocpp_server.ts",
     "build": "vite build",
     "start": "NODE_ENV=production tsx backend/server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "service:inverter": "NODE_ENV=production SERVICE_ROLE=collector tsx backend/services/inverter.ts",
-    "service:charger": "NODE_ENV=production SERVICE_ROLE=charger tsx backend/services/charger.ts",
-    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/services/dashboard.ts",
+    "service:inverter": "NODE_ENV=production SERVICE_ROLE=collector tsx backend/server.ts",
+    "service:charger": "NODE_ENV=production SERVICE_ROLE=charger tsx backend/server.ts",
+    "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/server.ts",
     "migrate:history": "tsx backend/scripts/migrate_history.ts"
   },
   "dependencies": {

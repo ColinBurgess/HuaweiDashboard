@@ -1,2 +1,2 @@
-import { startInverterService } from '../server.js';
+import { startInverterService } from './inverter-collector.js';
 startInverterService();

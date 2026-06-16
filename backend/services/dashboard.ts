@@ -1,2 +1,2 @@
-import { startDashboardService } from '../server.js';
+import { startDashboardService } from './ui-api.js';
 startDashboardService();

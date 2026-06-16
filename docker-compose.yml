@@ -1,27 +1,52 @@
 services:
+  # =========================================================
+  # MODO MONOLITO: Un solo contenedor con todos los servicios
+  # =========================================================
+  monolith:
+    build: .
+    image: huaweidashboard:latest
+    container_name: huawei-monolith
+    restart: unless-stopped
+    env_file: .env
+    profiles:
+      - monolith
+    ports:
+      - "3001:3001"
+      - "9100:9100"
+    volumes:
+      - ./storage:/app/storage
+    command: ["pnpm", "start"]
+
+  # =========================================================
+  # MODO MODULAR: Servicios desacoplados (recomendado)
+  # =========================================================
+
   ui-dashboard:
     build: .
     image: huaweidashboard:latest
-    container_name: huawei-ui-dashboard
+    container_name: huawei-dashboard-service
     restart: unless-stopped
     env_file: .env
+    profiles:
+      - modular
     ports:
       - "3001:3001"
     volumes:
-      # Volvemos a apuntar a tu carpeta local real en lugar de 'shared-storage'
       - ./storage:/app/storage
     command: ["pnpm", "run", "service:dashboard"]
 
   inverter-collector:
     build: .
     image: huaweidashboard:latest
-    container_name: huawei-inverter-collector
+    container_name: huawei-collector-service
     restart: unless-stopped
     env_file: .env
+    profiles:
+      - modular
     depends_on:
       - ui-dashboard
     volumes:
-      - ./storage:/app/storage  # Comparte la misma carpeta local real
+      - ./storage:/app/storage
     command: ["pnpm", "run", "service:inverter"]
 
   charger-service:
@@ -30,10 +55,12 @@ services:
     container_name: huawei-charger-service
     restart: unless-stopped
     env_file: .env
+    profiles:
+      - modular
     depends_on:
       - ui-dashboard
     ports:
       - "9100:9100"
     volumes:
-      - ./storage:/app/storage  # Comparte la misma carpeta local real
+      - ./storage:/app/storage
     command: ["pnpm", "run", "service:charger"]
