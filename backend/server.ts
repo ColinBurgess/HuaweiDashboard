@@ -15,6 +15,9 @@ import { client as ModbusClient } from 'jsmodbus';
 import {
   alertInverterDisconnected,
   alertInverterReconnected,
+  alertPvDisconnected,
+  alertPvReconnected,
+  alertPvStringLoss,
   isTelegramEnabled
 } from './services/telegram.js';
 
@@ -41,6 +44,27 @@ const MODBUS_PORTS = (process.env.MODBUS_PORTS ?? process.env.MODBUS_PORT ?? '50
   .map((port) => Number(port.trim()))
   .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
 const SLAVE_ID = 1;
+// Mapa declarativo de registros Modbus bajo monitorización activa
+const MODBUS_REGISTRY_MAP = [
+  { address: 30000, length: 15, name: "Identidad del Inversor (Model)", type: "String (ASCII)" },
+  { address: 30015, length: 10, name: "Número de Serie (SN)", type: "String (ASCII)" },
+  { address: 32016, length: 1,  name: "Tensión Placas String 1 (PV1 V)", type: "U16 / 10 (V)" },
+  { address: 32017, length: 1,  name: "Corriente Placas String 1 (PV1 A)", type: "U16 / 100 (A)" },
+  { address: 32018, length: 1,  name: "Tensión Placas String 2 (PV2 V)", type: "U16 / 10 (V)" },
+  { address: 32019, length: 1,  name: "Corriente Placas String 2 (PV2 A)", type: "U16 / 100 (A)" },
+  { address: 32064, length: 2,  name: "Potencia Entrada Total Solar", type: "I32 (W)" },
+  { address: 32066, length: 1,  name: "Tensión de Red Eléctrica", type: "U16 / 10 (V)" },
+  { address: 32069, length: 1,  name: "Frecuencia de Red Eléctrica", type: "U16 / 100 (Hz)" },
+  { address: 32080, length: 2,  name: "Potencia Activa Inversor", type: "I32 (W)" },
+  { address: 32087, length: 1,  name: "Temperatura del Inversor", type: "U16 / 10 (°C)" },
+  { address: 32089, length: 1,  name: "Estado de Operación Inversor", type: "U16" },
+  { address: 32114, length: 2,  name: "Producción Solar Diaria (Yield)", type: "I32 / 100 (kWh)" },
+  { address: 37113, length: 2,  name: "Lectura Contador de Red (Meter)", type: "I32 (W)" },
+  { address: 32002, length: 1,  name: "Estado 2 (Bit 1: Conexión PV)", type: "Bitfield" },
+  { address: 32010, length: 1,  name: "Alarma 3 (Bit 6: Pérdida String)", type: "Bitfield" },
+  { address: 37001, length: 2,  name: "Potencia de Batería (Carga/Desc)", type: "I32 (W)" },
+  { address: 37004, length: 1,  name: "Nivel de Carga Batería (SOC)", type: "U16 / 10 (%)" }
+];
 const HISTORY_DIR = path.resolve(process.cwd(), 'storage/history');
 const LOGS_DIR = path.resolve(process.cwd(), 'storage/logs');
 const DATA_DIR = path.resolve(process.cwd(), 'storage/data');
@@ -577,6 +601,8 @@ let inverterData = {
   consumption: 0,
   lastUpdate: new Date().toISOString(),
   connected: false,
+  pvConnectionStatus: true, // Bit 1 of register 32002: PV connection (1=connected, 0=disconnected)
+  pvStringLossAlarm: false, // Bit 6 of register 32010: PV String Loss alarm (Alarm ID: 2015)
   services: {} as Record<string, { lastHeartbeat: string, status: string, details?: string }>
 };
 
@@ -586,6 +612,12 @@ let modbusPortIndex = 0;
 let modbusConsecutiveConnectionFailures = 0;
 let isConnecting = false;
 let hasAlertedDisconnection = false; // Track if we already sent disconnection alert
+
+// PV Connection & String Loss Alarm tracking
+let pvConnectionStatusPrevious = true;
+let pvStringLossAlarmPrevious = false;
+let hasAlertedPvDisconnection = false;
+let hasAlertedPvStringLoss = false;
 
 function currentModbusPort(): number {
   return MODBUS_PORTS[modbusPortIndex];
@@ -1609,6 +1641,51 @@ socket.on('close', () => {
     }
   }, MODBUS_RECONNECT_DELAY_MS);
 });
+// Track PV status reads - only alert if we successfully read the registers
+let pvStatusRegistersAvailable = false;
+// Nueva variable para controlar que el log de éxito de telemetría se envíe solo una vez
+let firstTelemetrySyncLogged = false;
+
+// Contador de timeouts de lectura consecutivos para detectar apagado total
+let consecutiveModbusTimeouts = 0;
+
+function monitorPvStatus() {
+  // Only monitor if we've successfully read these registers at least once
+  if (!pvStatusRegistersAvailable) return;
+
+  // Check if PV connection status changed (automatic disconnect detected)
+  if (inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
+    pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
+
+    if (!inverterData.pvConnectionStatus && !hasAlertedPvDisconnection) {
+      // PV went from connected to disconnected
+      console.error('🔴 PV CONNECTION LOST - Automatico has tripped!');
+      alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
+      hasAlertedPvDisconnection = true;
+    } else if (inverterData.pvConnectionStatus && hasAlertedPvDisconnection) {
+      // PV reconnected
+      console.log('🟢 PV CONNECTION RESTORED');
+      alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
+      hasAlertedPvDisconnection = false;
+    }
+  }
+
+  // Check if PV String Loss alarm changed
+  if (inverterData.pvStringLossAlarm !== pvStringLossAlarmPrevious) {
+    pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
+
+    if (inverterData.pvStringLossAlarm && !hasAlertedPvStringLoss) {
+      // String loss alarm triggered
+      console.error('🔴 PV STRING LOSS DETECTED - Alarm ID: 2015');
+      alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
+      hasAlertedPvStringLoss = true;
+    } else if (!inverterData.pvStringLossAlarm && hasAlertedPvStringLoss) {
+      // String loss alarm cleared
+      console.log('🟢 PV STRING LOSS CLEARED');
+      hasAlertedPvStringLoss = false;
+    }
+  }
+}
 
 async function pollInverter() {
   if (!inverterData.connected) return;
@@ -1630,6 +1707,13 @@ async function pollInverter() {
       inverterData.model = u16ToStr(modelRes.response.body.values);
       const snRes = await client.readHoldingRegisters(30015, 10);
       inverterData.serialNumber = u16ToStr(snRes.response.body.values);
+
+      // --- LOG DE CONFIRMACIÓN DE IDENTIDAD ---
+      console.log(`📡 [MODBUS] Inverter Identity successfully read:`);
+      console.log(`   Model:  ${inverterData.model}`);
+      console.log(`   S/N:    ${inverterData.serialNumber}`);
+      // ----------------------------------------
+
     } catch (err) {
       console.warn('Modbus read failed (identity block):', err);
     }
@@ -1663,6 +1747,15 @@ async function pollInverter() {
     inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
   } catch (err) {
     console.warn('Modbus read failed (Operation Block):', err);
+    // --- PROTECCIÓN DE TIMEOUTS ---
+    consecutiveModbusTimeouts++;
+    // Si falla 3 veces consecutivas, asumimos que el inversor está apagado del todo
+    if (consecutiveModbusTimeouts >= 3) {
+      console.error('🔴 Persistent Modbus timeouts detected. Forcing socket disconnect...');
+      socket.destroy(); // Esto fuerza el cierre del socket TCP, disparando el evento 'close' e iniciando el envío de Telegram
+      inverterData.connected = false;
+      consecutiveModbusTimeouts = 0;
+    }
   }
 
   await delay(60);
@@ -1674,6 +1767,31 @@ async function pollInverter() {
     sectionReadStatus.gridMeter = true;
   } catch (err) {
     console.warn('Modbus read failed (Grid Meter):', err);
+  }
+
+  // Read PV Connection Status (Register 32002 - State 2, Bit 1)
+  // and PV String Loss Alarm (Register 32010 - Alarm 3, Bit 6)
+  // Note: These registers may not be available on all inverter models
+  await delay(60);
+  try {
+    const state2Res = await client.readHoldingRegisters(32002, 1);
+    const state2Value = state2Res.response.body.values[0];
+    inverterData.pvConnectionStatus = Boolean((state2Value >> 1) & 1); // Bit 1
+    pvStatusRegistersAvailable = true;
+  } catch (err) {
+    // Silently ignore if register not available - it's not critical
+    // inverterData.pvConnectionStatus remains at its previous value
+  }
+
+  await delay(60);
+  try {
+    const alarm3Res = await client.readHoldingRegisters(32010, 1);
+    const alarm3Value = alarm3Res.response.body.values[0];
+    inverterData.pvStringLossAlarm = Boolean((alarm3Value >> 6) & 1); // Bit 6
+    pvStatusRegistersAvailable = true;
+  } catch (err) {
+    // Silently ignore if register not available - it's not critical
+    // inverterData.pvStringLossAlarm remains at its previous value
   }
 
   if (MODBUS_HAS_BATTERY) {
@@ -1702,6 +1820,7 @@ async function pollInverter() {
 
   inverterData.lastUpdate = new Date().toISOString();
   emitCombinedData();
+  monitorPvStatus();
 
   const hasValidHistorySample = (
     sectionReadStatus.pv
@@ -1718,6 +1837,19 @@ async function pollInverter() {
     console.warn('Skipping history write due to incomplete/invalid Modbus sample');
     return;
   }
+
+  // --- LOG DE EXITO INICIAL DE TELEMETRÍA ---
+  if (!firstTelemetrySyncLogged) {
+    firstTelemetrySyncLogged = true;
+    console.log(`\n✅ [MODBUS] First successful telemetry sync completed:`);
+    console.log(`   Solar Input Power:  ${inverterData.inputPower} W`);
+    console.log(`   Inverter Active:    ${inverterData.activePower} W`);
+    console.log(`   Grid Net Power:     ${inverterData.gridPower} W (Contador)`);
+    console.log(`   House Load:         ${inverterData.houseLoad} W`);
+    console.log(`   PV Conn. State:     ${inverterData.pvConnectionStatus ? 'Connected (1)' : 'Disconnected (0)'}`);
+    console.log(`   PV String Alarm:    ${inverterData.pvStringLossAlarm ? 'Active (1)' : 'Inactive (0)'}\n`);
+  }
+  // ------------------------------------------
 
   const today = new Date().toISOString().split('T')[0];
   const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
@@ -1739,8 +1871,6 @@ async function pollInverter() {
   // Persist to InfluxDB
   writeToInflux(inverterData);
 }
-
-
 
 const ocppHttpServer = createServer((req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -2065,6 +2195,24 @@ setInterval(rotateCombinedLogIfNeeded, 3600000); // Check every hour (3600000 ms
 // Export functions for modular services
 export async function startInverterService() {
   console.log('🚀 Starting Inverter Service (Polling + History)...');
+
+  // Imprimir plan de monitoreo en formato tabla ASCII
+  console.log('\n📊 [MODBUS MONITORING PLAN]');
+  console.log('----------------------------------------------------------------------');
+  console.log(' ADDR.REG | LEN | PARAMETER DESCRIPTION                | CONVERSION');
+  console.log('----------------------------------------------------------------------');
+  MODBUS_REGISTRY_MAP.forEach(reg => {
+    // Si la batería está desactivada en las variables de entorno, no mostramos sus registros
+    if (!MODBUS_HAS_BATTERY && (reg.address === 37001 || reg.address === 37004)) {
+      return;
+    }
+    const addrStr = String(reg.address).padEnd(8);
+    const lenStr = String(reg.length).padEnd(3);
+    const nameStr = reg.name.padEnd(36);
+    const typeStr = reg.type;
+    console.log(` ${addrStr} | ${lenStr} | ${nameStr} | ${typeStr}`);
+  });
+  console.log('----------------------------------------------------------------------\n');
 
   // In modular mode, we need to sync with other services (like the charger)
   if (process.env.START_MONOLITH !== 'true' && !process.argv[1].endsWith('server.ts') && !process.argv[1].endsWith('server.js')) {
