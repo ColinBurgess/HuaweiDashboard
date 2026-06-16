@@ -4,6 +4,7 @@ services:
     image: huaweidashboard:latest
     container_name: huawei-ui-dashboard
     restart: unless-stopped
+    env_file: .env
     ports:
       - "3001:3001"
     volumes:
@@ -16,6 +17,7 @@ services:
     image: huaweidashboard:latest
     container_name: huawei-inverter-collector
     restart: unless-stopped
+    env_file: .env
     depends_on:
       - ui-dashboard
     volumes:
@@ -27,6 +29,7 @@ services:
     image: huaweidashboard:latest
     container_name: huawei-charger-service
     restart: unless-stopped
+    env_file: .env
     depends_on:
       - ui-dashboard
     ports:

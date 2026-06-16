@@ -17,7 +17,7 @@ async function checkId(id: number) {
     const socket = new net.Socket();
     const client = new ModbusClient.TCP(socket, id);
     socket.setTimeout(1500);
-    
+
     socket.on('connect', async () => {
       try {
         // Read Model Name (30000, 15 regs)
@@ -30,7 +30,7 @@ async function checkId(id: number) {
         socket.destroy();
       }
     });
-    
+
     socket.on('error', (err) => resolve({ id, success: false, error: err.message }));
     socket.on('timeout', () => resolve({ id, success: false, error: 'Timeout' }));
     socket.connect({ host: HOST, port: PORT });
@@ -39,7 +39,7 @@ async function checkId(id: number) {
 
 async function run() {
   console.log(`--- ESCANEO DE DISPOSITIVOS (IDs 1-20) en ${HOST} ---`);
-  
+
   const results = [];
   // Scan in parallel (batches) or sequence. Sequence is safer for PLC/Dongles.
   for (let id = 1; id <= 20; id++) {
@@ -53,7 +53,7 @@ async function run() {
       }
     }
   }
-  
+
   process.exit(0);
 }
 
