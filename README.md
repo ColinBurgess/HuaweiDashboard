@@ -95,9 +95,16 @@ Variables disponibles actualmente:
 
 ### Alertas por Telegram (Opcional)
 
-El dashboard puede enviar notificaciones automáticas a Telegram cuando:
-- ⚠️ El inversor se desconecta (ej: diferencial saltado)
-- ✅ El inversor se vuelve a conectar
+El dashboard puede enviar notificaciones automáticas a Telegram para eventos críticos:
+
+**Alertas del Inversor**:
+- ⚠️ Desconexión Modbus (ej: diferencial saltado, error de red)
+- ✅ Reconexión exitosa
+
+**Alertas de Paneles Solares (PV)**:
+- ⚠️ Pérdida de conexión PV (automático de entrada solar saltado)
+- ✅ Restauración de conexión PV
+- ⚠️ Pérdida de string solar detectada (Alarm ID: 2015)
 
 **Configuración**:
 
@@ -119,10 +126,14 @@ El dashboard puede enviar notificaciones automáticas a Telegram cuando:
    - Añade a tu pareja/familia que quiera recibir alertas
    - Añade el bot al grupo
 
-3. **Obtener el Chat ID**:
-   - Invita el bot al grupo
-   - En la terminal/logs, podrás ver el `TELEGRAM_CHAT_ID` cuando el bot se inicialice
-   - Alternativamente, envía un mensaje al bot en el grupo y consulta el log
+3. **Obtener el Chat ID** (2 opciones):
+   - **Opción A (Automática)**: Ejecuta el script helper:
+     ```bash
+     pnpm tsx backend/scripts/get_telegram_chat_id.ts
+     ```
+     Envía un mensaje al bot en Telegram y el script te mostrará tu Chat ID.
+   
+   - **Opción B (Manual)**: Invita el bot al grupo y consulta los logs del dashboard para ver el `TELEGRAM_CHAT_ID`.
 
 4. **Actualizar .env**:
    ```env
@@ -131,7 +142,21 @@ El dashboard puede enviar notificaciones automáticas a Telegram cuando:
    TELEGRAM_ALERTS_ENABLED=true
    ```
 
-**Nota**: Las alertas se envían con un intervalo mínimo de 5 minutos entre el mismo tipo de alerta para evitar spam.
+**Testing de Alertas**:
+
+Para verificar que tu configuración de Telegram funciona correctamente, ejecuta:
+
+```bash
+# Desarrollo
+pnpm tsx backend/scripts/test_telegram_alerts.ts
+
+# Producción (en Docker)
+docker compose exec inverter-collector pnpm tsx backend/scripts/test_telegram_alerts.ts
+```
+
+Este script enviará todas las alertas disponibles a tu Telegram para verificar que está todo configurado.
+
+**Nota**: Las alertas se envían con un intervalo mínimo de 30-60 segundos entre el mismo tipo de alerta para evitar spam.
 
 ### Servidor OCPP
 
