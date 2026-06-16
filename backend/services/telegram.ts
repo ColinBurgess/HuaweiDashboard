@@ -61,8 +61,20 @@ export async function sendTelegramAlert(alert: TelegramAlert): Promise<boolean> 
     info: 'ℹ️'
   };
 
+  // Format timestamp with timezone-aware locale string
+  const now = new Date();
+  const timestamp = now.toLocaleString('es-ES', { 
+    timeZone: 'Europe/Madrid',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
   const emoji = severityEmoji[alert.severity ?? 'info'];
-  const text = `${emoji} **${alert.title}**\n\n${alert.message}\n\n_${new Date().toLocaleString('es-ES')}_`;
+  const text = `${emoji} **${alert.title}**\n\n${alert.message}\n\n_${timestamp} (Madrid)_`;
 
   try {
     const response = await fetch(
