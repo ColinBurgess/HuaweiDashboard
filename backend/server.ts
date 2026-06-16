@@ -212,6 +212,44 @@ function recordLifecycleLog(message: string, level: RuntimeLogLevel = 'info', sy
   appendRuntimeLog(entry, sync);
 }
 
+// Log rotation constants
+const MAX_COMBINED_LOG_SIZE_MB = 100;
+const MAX_COMBINED_LOG_SIZE_BYTES = MAX_COMBINED_LOG_SIZE_MB * 1024 * 1024;
+let lastLogRotationDate = new Date();
+
+function rotateCombinedLogIfNeeded() {
+  try {
+    // Check if combined.jsonl exists and get its size
+    if (!fs.existsSync(COMBINED_LOG_FILE)) {
+      return; // File doesn't exist yet, nothing to rotate
+    }
+
+    const stats = fs.statSync(COMBINED_LOG_FILE);
+    const fileSizeBytes = stats.size;
+    const now = new Date();
+    const isNewDay = now.toDateString() !== lastLogRotationDate.toDateString();
+    
+    // Rotate if: file > 100 MB OR day changed
+    if (fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES || isNewDay) {
+      const rotatedFileName = `combined-${formatLogSessionTimestamp(lastLogRotationDate)}.jsonl`;
+      const rotatedFilePath = path.join(LOGS_DIR, rotatedFileName);
+      
+      // Rename current combined.jsonl to combined-TIMESTAMP.jsonl
+      fs.renameSync(COMBINED_LOG_FILE, rotatedFilePath);
+      
+      const reason = fileSizeBytes > MAX_COMBINED_LOG_SIZE_BYTES 
+        ? `size threshold (${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB)`
+        : 'daily rotation';
+      
+      originalConsole.log(`[LOG ROTATION] Rotated combined.jsonl → ${rotatedFileName} (reason: ${reason})`);
+      
+      lastLogRotationDate = now;
+    }
+  } catch (err) {
+    originalConsole.error('[LOG ROTATION ERROR]', err);
+  }
+}
+
 console.log = (...args: unknown[]) => {
   originalConsole.log(...args);
   persistRuntimeLog('info', 'server', args);
@@ -1988,6 +2026,10 @@ app.get('/api/logs/:date', (req, res) => {
   });
 
   startLogWatcher();
+
+// Rotate combined logs every hour or when size threshold is reached
+rotateCombinedLogIfNeeded();
+setInterval(rotateCombinedLogIfNeeded, 3600000); // Check every hour (3600000 ms)
 
 // Export functions for modular services
 export async function startInverterService() {
