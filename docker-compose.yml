@@ -1,104 +1,36 @@
-version: '3.8'
-
 services:
-  # --- BASE DE DATOS ---
-  influxdb:
-    image: influxdb:2.7
-    container_name: huawei-influxdb
-    profiles: ["modular", "monolith"] # Disponible en ambos modos
-    restart: unless-stopped
-    ports:
-      - "8086:8086"
-    volumes:
-      - ./storage/influxdb_data:/var/lib/influxdb2
-      - ./storage/influxdb_config:/etc/influxdb2
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=huawei-dashboard-pass
-      - DOCKER_INFLUXDB_INIT_ORG=huawei-dashboard
-      - DOCKER_INFLUXDB_INIT_BUCKET=telemetry
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
-
-  # --- MODO MONOLITO (Tradicional) ---
-  huawei-monolith:
+  ui-dashboard:
     build: .
-    container_name: huawei-dashboard-monolith
-    profiles: ["monolith"]
+    image: huaweidashboard:latest
+    container_name: huawei-ui-dashboard
     restart: unless-stopped
-    depends_on:
-      - influxdb
     ports:
-      - "${APP_PORT:-3001}:3001"
-      - "9100:9100"
+      - "3001:3001"
     volumes:
-      - ./storage/history:/app/storage/history
-      - ./storage/logs:/app/storage/logs
-      - ./storage/data:/app/storage/data
-    env_file:
-      - .env
-    environment:
-      - INFLUX_URL=http://influxdb:8086
-      - INFLUX_TOKEN=my-super-secret-token
-      - INFLUX_ORG=huawei-dashboard
-      - INFLUX_BUCKET=telemetry
-      - START_MONOLITH=true
-      - MODBUS_HAS_BATTERY=false
+      # Volvemos a apuntar a tu carpeta local real en lugar de 'shared-storage'
+      - ./storage:/app/storage
+    command: ["npm", "run", "service:dashboard"]
 
-  # --- MODO MODULAR (Microservicios) ---
   inverter-collector:
     build: .
+    image: huaweidashboard:latest
     container_name: huawei-inverter-collector
-    profiles: ["modular"]
     restart: unless-stopped
     depends_on:
-      - influxdb
-    command: npm run service:inverter
+      - ui-dashboard
     volumes:
-      - ./storage/history:/app/storage/history
-      - ./storage/logs:/app/storage/logs
-      - ./storage/data:/app/storage/data
-    env_file:
-      - .env
-    environment:
-      - INFLUX_URL=http://influxdb:8086
-      - INFLUX_TOKEN=my-super-secret-token
-      - INFLUX_ORG=huawei-dashboard
-      - INFLUX_BUCKET=telemetry
-      - MODBUS_HAS_BATTERY=false
+      - ./storage:/app/storage  # Comparte la misma carpeta local real
+    command: ["npm", "run", "service:inverter"]
 
   charger-service:
     build: .
+    image: huaweidashboard:latest
     container_name: huawei-charger-service
-    profiles: ["modular"]
     restart: unless-stopped
-    command: npm run service:charger
+    depends_on:
+      - ui-dashboard
     ports:
       - "9100:9100"
     volumes:
-      - ./storage/logs:/app/storage/logs
-      - ./storage/data:/app/storage/data
-    env_file:
-      - .env
-
-  ui-dashboard:
-    build: .
-    container_name: huawei-ui-dashboard
-    profiles: ["modular"]
-    restart: unless-stopped
-    depends_on:
-      - influxdb
-    command: npm run service:dashboard
-    ports:
-      - "${APP_PORT:-3001}:3001"
-    volumes:
-      - ./storage/history:/app/storage/history
-      - ./storage/logs:/app/storage/logs
-      - ./storage/data:/app/storage/data
-    env_file:
-      - .env
-    environment:
-      - INFLUX_URL=http://influxdb:8086
-      - INFLUX_TOKEN=my-super-secret-token
-      - INFLUX_ORG=huawei-dashboard
-      - INFLUX_BUCKET=telemetry
+      - ./storage:/app/storage  # Comparte la misma carpeta local real
+    command: ["npm", "run", "service:charger"]

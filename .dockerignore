@@ -1,12 +1,21 @@
-node_modules
-dist
-history
-logs
-data
-*.tmp
-.DS_Store
-.git
+# Ignorar dependencias y compilaciones en cualquier subcarpeta (crucial para monorepos)
+**/node_modules/
+**/dist/
+
+# Ignorar la carpeta de almacenamiento de datos local y sus variantes
+storage/
+**/storage/
+**/data/
+**/history/
+**/logs/
+
+# Archivos temporales y del sistema
+**/*.tmp
+**/.DS_Store
+.git/
 .env
+
+# Archivos de configuración de Docker que no se necesitan dentro del contenedor
 Dockerfile
 docker-compose.yml
 README.md

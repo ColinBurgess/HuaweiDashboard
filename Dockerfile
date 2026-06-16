@@ -1,38 +1,41 @@
+# ==========================================
+# ETAPA 1: Compilación del Frontend (Builder)
+# ==========================================
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+
+# ==========================================
+# ETAPA 2: Imagen de Producción (Final)
+# ==========================================
 FROM node:20-slim
 
 WORKDIR /app
 
-# Instalar dependencias de sistema necesarias para algunas librerías si fuera el caso
-# (Para Modbus y WebSockets usualmente node:slim es suficiente)
-
-# Copiar archivos de dependencias
+# Copiar manifiestos de dependencias
 COPY package*.json ./
 
-# Instalar todas las dependencias (incluyendo tsx y typescript)
-RUN npm install
+# Copiar dependencias y directorios compilados
+COPY --chown=node:node --from=builder /app/node_modules ./node_modules
+COPY --chown=node:node --from=builder /app/backend ./backend
+COPY --chown=node:node --from=builder /app/dist ./dist
+COPY --chown=node:node --from=builder /app/metadata.json ./metadata.json
 
-# Copiar el resto del código fuente
-COPY . .
-
-# Verificar tipos y sintaxis (evita errores de referencia en el navegador)
-RUN npm run lint
-
-# Construir el frontend para producción (genera la carpeta dist/)
-RUN npm run build
-
-# Crear directorios de almacenamiento y asegurar permisos para el usuario 'node'
+# Crear las carpetas de almacenamiento como ROOT (para evitar el Permission Denied)
+# y cambiarles los permisos al usuario 'node' (es instantáneo porque están vacías)
 RUN mkdir -p storage/data storage/history storage/logs && \
-    chown -R node:node /app
+    chown -R node:node storage
 
-# Cambiar al usuario no-root
+# Cambiar finalmente al usuario no-root por seguridad
 USER node
 
-# Exponer los puertos del dashboard y del servidor OCPP
 EXPOSE 3001 9100
 
-# Variables de entorno por defecto
-ENV NODE_ENV=production
-ENV PORT=3001
-
-# Comando para arrancar el servidor
 CMD ["npm", "start"]
