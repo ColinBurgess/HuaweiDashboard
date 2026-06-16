@@ -1,14 +1,14 @@
 # ==========================================
 # ETAPA 1: Compilación del Frontend (Builder)
 # ==========================================
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
 # Install pnpm
 RUN npm install -g pnpm
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
@@ -18,7 +18,7 @@ RUN pnpm run build
 # ==========================================
 # ETAPA 2: Imagen de Producción (Final)
 # ==========================================
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 # Copiar manifiestos de dependencias
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 # Copiar dependencias y directorios compilados
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
