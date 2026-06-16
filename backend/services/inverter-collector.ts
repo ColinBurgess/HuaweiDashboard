@@ -76,6 +76,8 @@ let pvStringLossAlarmPrevious = false;
 let hasAlertedPvDisconnection = false;
 let hasAlertedPvStringLoss = false;
 let pvStatusRegistersAvailable = false;
+const SERVICE_START_TIME = Date.now();
+const PV_STATUS_GRACE_PERIOD_MS = 30000; // 30 seconds to ignore transient state changes on startup
 
 // Telemetry
 let firstTelemetrySyncLogged = false;
@@ -179,9 +181,19 @@ if (socket) {
 /**
  * Monitor PV connection status and string loss alarms
  * Sends Telegram alerts on state transitions
+ * Ignores transient state changes during startup (grace period: 30s)
  */
 function monitorPvStatus() {
   if (!pvStatusRegistersAvailable) return;
+
+  // Ignore state transitions during startup grace period (prevents false alerts on service restart)
+  const isWithinGracePeriod = Date.now() - SERVICE_START_TIME < PV_STATUS_GRACE_PERIOD_MS;
+  if (isWithinGracePeriod) {
+    // Still update the previous state to prepare for post-grace-period monitoring
+    pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
+    pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
+    return;
+  }
 
   if (inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
     pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
