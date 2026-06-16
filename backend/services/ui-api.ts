@@ -421,6 +421,14 @@ export async function startDashboardService() {
     loadLiveState();
     setInterval(loadLiveState, 1000);
 
+    // Emit real-time inverter data to connected clients every second
+    // This powers the Power & Consumption widget with live updates
+    if (io) {
+      setInterval(() => {
+        io.emit('inverter-data', inverterData);
+      }, 1000);
+    }
+
     // Read logs from file every 500ms
     readAndEmitLogs();
     setInterval(readAndEmitLogs, 500);
