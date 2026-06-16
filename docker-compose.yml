@@ -9,7 +9,7 @@ services:
     volumes:
       # Volvemos a apuntar a tu carpeta local real en lugar de 'shared-storage'
       - ./storage:/app/storage
-    command: ["npm", "run", "service:dashboard"]
+    command: ["pnpm", "run", "service:dashboard"]
 
   inverter-collector:
     build: .
@@ -20,7 +20,7 @@ services:
       - ui-dashboard
     volumes:
       - ./storage:/app/storage  # Comparte la misma carpeta local real
-    command: ["npm", "run", "service:inverter"]
+    command: ["pnpm", "run", "service:inverter"]
 
   charger-service:
     build: .
@@ -33,4 +33,4 @@ services:
       - "9100:9100"
     volumes:
       - ./storage:/app/storage  # Comparte la misma carpeta local real
-    command: ["npm", "run", "service:charger"]
+    command: ["pnpm", "run", "service:charger"]
