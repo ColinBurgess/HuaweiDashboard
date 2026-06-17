@@ -451,12 +451,12 @@ export async function startDashboardService() {
     loadLiveState();
     setInterval(loadLiveState, 1000);
 
-    // Emit real-time inverter data to connected clients every second
-    // This powers the Power & Consumption widget with live updates
+    // Emit real-time inverter data to connected clients
+    // Frequency matches MODBUS_POLLING_INTERVAL to avoid duplicate data points
     if (io) {
       setInterval(() => {
         io.emit('inverter-data', inverterData);
-      }, 1000);
+      }, MODBUS_POLLING_INTERVAL);
     }
 
     // Read logs from file every 500ms
