@@ -163,6 +163,48 @@ function generateTransactionId(): number {
 }
 
 // ============================================================================
+// PAYLOAD SANITIZATION
+// ============================================================================
+
+/**
+ * Sanitize OCPP payloads for safe logging
+ * Handles invalid/malformed timestamps that may come from charger after power loss
+ * (Huawei SCharger loses RTC, reports timestamp with timezone misalignment)
+ * 
+ * After power loss, charger reports SecurityEventNotification with incorrectly formatted
+ * timestamp (e.g. "17:11:31.000Z" for local time in UTC+2). This causes "Invalid Date"
+ * when serialized. This function replaces invalid timestamps with server's current time.
+ */
+function sanitizePayloadForLogging(payload: any): any {
+  try {
+    // Use JSON replacer to safely handle invalid Dates
+    const sanitized = JSON.parse(JSON.stringify(payload, (_key, value) => {
+      // If value is a Date object and it's invalid, replace with current time
+      if (value instanceof Date && isNaN(value.getTime())) {
+        return new Date().toISOString();
+      }
+      // If value is a string that looks like a timestamp but is invalid, replace it
+      if (typeof value === 'string' && /^\d{2}:\d{2}:\d{2}\.\d{3}Z/.test(value)) {
+        try {
+          const parsed = new Date(value);
+          if (isNaN(parsed.getTime())) {
+            // Invalid ISO-like timestamp, replace with current time
+            return new Date().toISOString();
+          }
+        } catch {
+          return new Date().toISOString();
+        }
+      }
+      return value;
+    }));
+    return sanitized;
+  } catch (err) {
+    // If anything fails, return the original payload
+    return payload;
+  }
+}
+
+// ============================================================================
 // OCPP CALL MANAGEMENT
 // ============================================================================
 
@@ -945,7 +987,7 @@ function handleOcppCall(
         status: 'Accepted',
       })));
       emitCombinedData();
-      console.log(`[${chargePointId}] BootNotification accepted`, payload);
+      console.log(`[${chargePointId}] BootNotification accepted`, sanitizePayloadForLogging(payload));
       configureChargerTelemetryIfNeeded(ws, chargePointId);
       reconcileChargerControlState('BootNotification');
       return;
@@ -983,7 +1025,7 @@ function handleOcppCall(
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
-      console.log(`[${chargePointId}] StatusNotification`, payload);
+      console.log(`[${chargePointId}] StatusNotification`, sanitizePayloadForLogging(payload));
 
       if (previousStatus === 'Unavailable' && chargerState.status !== 'Unavailable' && chargerState.startRequested) {
         console.log(`[${chargePointId}] Charger recovered from Unavailable → triggering reconciliation`);
@@ -1030,7 +1072,7 @@ function handleOcppCall(
         idTagInfo: { status: 'Accepted' },
       })));
       emitCombinedData();
-      console.log(`[${chargePointId}] StartTransaction accepted, assigned txId=${chargerState.transactionId}`, payload);
+      console.log(`[${chargePointId}] StartTransaction accepted, assigned txId=${chargerState.transactionId}`, sanitizePayloadForLogging(payload));
       return;
 
     case 'StopTransaction': {
@@ -1044,7 +1086,7 @@ function handleOcppCall(
       pendingApiStopRequest = false;
       ws.send(JSON.stringify(buildCallResult(uniqueId, { idTagInfo: { status: 'Accepted' } })));
       emitCombinedData();
-      console.log(`[${chargePointId}] StopTransaction`, payload);
+      console.log(`[${chargePointId}] StopTransaction`, sanitizePayloadForLogging(payload));
 
       if (chargerState.startRequested) {
         const stopReason: string = payload?.reason ?? 'unknown';
@@ -1082,7 +1124,7 @@ function handleOcppCall(
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
-      console.log(`[${chargePointId}] ${action}`, payload);
+      console.log(`[${chargePointId}] ${action}`, sanitizePayloadForLogging(payload));
       return;
 
     default:
