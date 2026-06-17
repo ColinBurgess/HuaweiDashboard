@@ -562,7 +562,8 @@ function applyGreenChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-  if (chargerState.status !== 'Charging') {
+  // Only start a NEW transaction if we don't have an active one
+  if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
     sendRemoteStartTransaction();
   }
 }
@@ -610,7 +611,8 @@ function applyHybridChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-  if (chargerState.status !== 'Charging') {
+  // Only start a NEW transaction if we don't have an active one
+  if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
     sendRemoteStartTransaction();
   }
 }
@@ -741,11 +743,11 @@ function reconcileChargerControlState(trigger: string): void {
   }
 
   if (chargerState.chargingMode === 'FAST') {
-    if (chargerState.status !== 'Charging') {
+    if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
       console.log('[RECON] FAST mode start — sending max limit and start command');
       sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
       sendRemoteStartTransaction();
-    } else {
+    } else if (chargerState.status === 'Charging') {
       console.log('[RECON] FAST mode active and charging, ensuring max limit');
       if (chargerState.appliedCurrentLimitA !== GREEN_MAX_CHARGING_AMPS) {
         sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
