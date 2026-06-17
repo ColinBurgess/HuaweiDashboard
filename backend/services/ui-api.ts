@@ -16,6 +16,9 @@ import {
   HISTORY_DIR,
   MAX_LIVE_LOGS,
   RuntimeLogEntry,
+  MODBUS_POLLING_INTERVAL,
+  MODBUS_HOST,
+  MODBUS_PORTS,
 } from '../config/constants.js';
 import {
   calculateStatsForDate,
@@ -249,6 +252,27 @@ if (app) {
       } catch (error) {
         res.status(500).json({ error: 'Corrupt log file' });
       }
+    });
+  });
+
+  // ============================================================================
+  // EXPRESS ROUTES - DIAGNOSTICS & CONFIG
+  // ============================================================================
+
+  /**
+   * GET /api/config/collector
+   * Returns the current collector service configuration
+   * Useful for verifying that environment variables are applied correctly
+   */
+  app.get('/api/config/collector', (req, res) => {
+    res.json({
+      pollingInterval: MODBUS_POLLING_INTERVAL,
+      modbusHost: MODBUS_HOST,
+      modbusPorts: MODBUS_PORTS,
+      connected: inverterData.connected,
+      model: inverterData.model,
+      serialNumber: inverterData.serialNumber,
+      lastUpdate: inverterData.lastUpdate,
     });
   });
 
