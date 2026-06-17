@@ -577,6 +577,14 @@ function applyHybridChargingPolicy(): void {
   if (!chargerState.startRequested) return;
   if (!canSendToCharger()) return;
 
+  // DEBUG: Log inverterData state to diagnose why gridPower might be 0 or undefined
+  if (!inverterData.connected) {
+    console.warn('[HYBRID-DEBUG] ⚠️ Inverter not connected, gridPower cannot be read');
+  }
+  if (inverterData.gridPower === undefined || inverterData.gridPower === null) {
+    console.warn('[HYBRID-DEBUG] ⚠️ gridPower is undefined/null. inputPower=' + inverterData.inputPower + ' activePower=' + inverterData.activePower);
+  }
+
   const gridNetW = inverterData.gridPower;
   const chargerPowerW = Math.max(0, chargerState.powerW);
   const surplusW = gridNetW + chargerPowerW;
