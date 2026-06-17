@@ -157,6 +157,7 @@ if (app) {
    * Request charger to start charging
    */
   app.post('/api/charger/start', (req, res) => {
+    console.log('[API] POST /api/charger/start → startRequested=true, mode=' + chargerState.chargingMode);
     chargerState.startRequested = true;
     chargerState.lastUpdate = new Date().toISOString();
     saveLiveState();
@@ -169,6 +170,7 @@ if (app) {
    * Request charger to stop charging
    */
   app.post('/api/charger/stop', (req, res) => {
+    console.log('[API] POST /api/charger/stop → startRequested=false');
     chargerState.startRequested = false;
     chargerState.appliedCurrentLimitA = undefined;
     chargerState.lastRequestedCurrentLimitA = undefined;
@@ -185,11 +187,13 @@ if (app) {
   app.post('/api/charger/mode', (req, res) => {
     const modeRaw = String(req.body?.mode ?? '').toUpperCase();
     if (modeRaw !== 'FAST' && modeRaw !== 'GREEN' && modeRaw !== 'HYBRID') {
+      console.warn('[API] POST /api/charger/mode → Invalid mode: ' + modeRaw);
       res.status(400).json({ error: 'Invalid mode. Use FAST, GREEN or HYBRID.' });
       return;
     }
 
     const mode = modeRaw as ChargingMode;
+    console.log('[API] POST /api/charger/mode → mode=' + mode);
     chargerState.chargingMode = mode;
     chargerState.lastUpdate = new Date().toISOString();
     saveLiveState();
