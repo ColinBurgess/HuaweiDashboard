@@ -160,6 +160,9 @@ if (app) {
     console.log('[API] POST /api/charger/start → startRequested=true, mode=' + chargerState.chargingMode);
     chargerState.startRequested = true;
     chargerState.lastUpdate = new Date().toISOString();
+    // CRITICAL: Update both chargerState AND inverterData so saveLiveState() persists the change
+    inverterData.chargerStartRequested = true;
+    inverterData.chargingMode = chargerState.chargingMode;
     saveLiveState();
 
     res.json({ status: 'sent', mode: chargerState.chargingMode });
@@ -175,6 +178,8 @@ if (app) {
     chargerState.appliedCurrentLimitA = undefined;
     chargerState.lastRequestedCurrentLimitA = undefined;
     chargerState.lastUpdate = new Date().toISOString();
+    // CRITICAL: Update both chargerState AND inverterData so saveLiveState() persists the change
+    inverterData.chargerStartRequested = false;
     saveLiveState();
 
     res.json({ status: 'sent' });
@@ -196,6 +201,8 @@ if (app) {
     console.log('[API] POST /api/charger/mode → mode=' + mode);
     chargerState.chargingMode = mode;
     chargerState.lastUpdate = new Date().toISOString();
+    // CRITICAL: Update both chargerState AND inverterData so saveLiveState() persists the change
+    inverterData.chargingMode = mode;
     saveLiveState();
 
     res.json({
