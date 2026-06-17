@@ -449,14 +449,45 @@ function canSendToCharger(): boolean {
  * Send RemoteStartTransaction to charger
  * Initiates a charging transaction
  */
-function sendRemoteStartTransaction(): boolean {
+function sendRemoteStartTransaction(targetAmpsForProfile?: number): boolean {
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
-  sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStartTransaction', {
+
+  const payload: Record<string, any> = {
     connectorId: 1,
     idTag: 'Dashboard',
-  });
+  };
+
+  // If charging amps are provided and smart charging is enabled, embed the profile
+  // directly in the RemoteStartTransaction to avoid back-to-back OCPP messages.
+  // This is the standard OCPP 1.6 pattern for atomic profile + start operations.
+  if (targetAmpsForProfile !== undefined && OCPP_SMART_CHARGING_ENABLED) {
+    const chargePointId = chargerState.chargePointId || 'CP?';
+    const preferredRateUnit = getPreferredProbeRateUnit(chargePointId);
+    const limitValue =
+      preferredRateUnit === 'W'
+        ? Math.round(targetAmpsForProfile * GREEN_GRID_VOLTAGE)
+        : Math.round(targetAmpsForProfile);
+
+    payload.chargingProfile = {
+      chargingProfileId: 100,
+      stackLevel: 1,
+      chargingProfilePurpose: 'TxProfile',
+      chargingProfileKind: 'Absolute',
+      chargingSchedule: {
+        chargingRateUnit: preferredRateUnit,
+        chargingSchedulePeriod: [
+          {
+            startPeriod: 0,
+            limit: limitValue,
+          },
+        ],
+      },
+    };
+  }
+
+  sendOcppCall(chargerWs, chargerState.chargePointId || 'CP?', 'RemoteStartTransaction', payload);
   chargerState.lastUpdate = new Date().toISOString();
   emitCombinedData();
   console.log('[API] → RemoteStartTransaction');
@@ -609,11 +640,17 @@ function applyGreenChargingPolicy(): void {
   const shouldUpdateLimit = lastSent === undefined || (diffWatts !== null && diffWatts > GREEN_HYSTERESIS_WATTS);
   console.log(`[GREEN] cycle: gridNet=${gridNetW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A bounded=${boundedTargetAmps}A target=${targetWatts}W lastSent=${lastSent ?? 'none'}A lastSentW=${lastSentWatts ?? 'none'} diffW=${diffWatts ?? 'n/a'} thresholdW=${GREEN_HYSTERESIS_WATTS} willUpdate=${shouldUpdateLimit}`);
 
-  if (shouldUpdateLimit) {
-    sendChargingLimit(boundedTargetAmps);
-  }
   if (chargerState.status !== 'Charging') {
-    sendRemoteStartTransaction();
+    // If we need to start charging, embed the profile directly in RemoteStartTransaction.
+    // This avoids back-to-back OCPP messages that would cause buffer overflow in the charger.
+    sendRemoteStartTransaction(shouldUpdateLimit ? boundedTargetAmps : undefined);
+    if (shouldUpdateLimit) {
+      chargerState.lastRequestedCurrentLimitA = boundedTargetAmps;
+    }
+  } else if (shouldUpdateLimit) {
+    // If already charging, send SetChargingProfile as a separate update.
+    sendChargingLimit(boundedTargetAmps);
+    chargerState.lastRequestedCurrentLimitA = boundedTargetAmps;
   }
 }
 
@@ -657,11 +694,17 @@ function applyHybridChargingPolicy(): void {
   const shouldUpdateLimit = lastSent === undefined || (diffWatts !== null && diffWatts > GREEN_HYSTERESIS_WATTS);
   console.log(`[HYBRID] cycle: gridNet=${gridNetW}W chargerPower=${chargerPowerW}W surplus=${surplusW}W rawTarget=${rawTargetAmps.toFixed(2)}A min=${minimumHybridAmps}A bounded=${boundedTargetAmps}A target=${targetWatts}W lastSent=${lastSent ?? 'none'}A lastSentW=${lastSentWatts ?? 'none'} diffW=${diffWatts ?? 'n/a'} thresholdW=${GREEN_HYSTERESIS_WATTS} willUpdate=${shouldUpdateLimit}`);
 
-  if (shouldUpdateLimit) {
-    sendChargingLimit(boundedTargetAmps);
-  }
   if (chargerState.status !== 'Charging') {
-    sendRemoteStartTransaction();
+    // If we need to start charging, embed the profile directly in RemoteStartTransaction.
+    // This avoids back-to-back OCPP messages that would cause buffer overflow in the charger.
+    sendRemoteStartTransaction(shouldUpdateLimit ? boundedTargetAmps : undefined);
+    if (shouldUpdateLimit) {
+      chargerState.lastRequestedCurrentLimitA = boundedTargetAmps;
+    }
+  } else if (shouldUpdateLimit) {
+    // If already charging, send SetChargingProfile as a separate update.
+    sendChargingLimit(boundedTargetAmps);
+    chargerState.lastRequestedCurrentLimitA = boundedTargetAmps;
   }
 }
 
