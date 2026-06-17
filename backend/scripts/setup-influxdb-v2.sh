@@ -9,7 +9,8 @@
 # Idempotent: Safe to run multiple times. Detects existing configuration.
 #
 # Usage:
-#   ./backend/scripts/setup-influxdb-v2.sh
+#   ./backend/scripts/setup-influxdb-v2.sh              # Normal setup
+#   ./backend/scripts/setup-influxdb-v2.sh --rotate-password  # Rotate admin password
 #
 # What it does:
 #   1. Waits for InfluxDB to be ready
@@ -18,10 +19,21 @@
 #   4. If configured: Shows current configuration
 #   5. Updates .env with credentials
 #
+# Password Management:
+#   - Reads INFLUX_PASSWORD from .env if it exists
+#   - If missing, generates a random password and saves to .env
+#   - Use --rotate-password to generate and apply a new password
+#
 # Note: Run this BEFORE starting the application services
 ###############################################################################
 
 set -e
+
+# Parse command-line flags
+ROTATE_PASSWORD=false
+if [ "$1" = "--rotate-password" ]; then
+  ROTATE_PASSWORD=true
+fi
 
 # Configuration
 INFLUX_HOST="${INFLUX_HOST:-localhost}"
@@ -30,8 +42,15 @@ INFLUX_URL="http://${INFLUX_HOST}:${INFLUX_PORT}"
 INFLUX_ORG="${INFLUX_ORG:-huawei-dashboard}"
 INFLUX_BUCKET="${INFLUX_BUCKET:-telemetry}"
 INFLUX_USERNAME="${INFLUX_USERNAME:-admin}"
-INFLUX_PASSWORD="${INFLUX_PASSWORD:-huawei2024}"
 ENV_FILE=".env"
+
+# Load or generate INFLUX_PASSWORD
+if [ -f "$ENV_FILE" ] && grep -q "^INFLUX_PASSWORD=" "$ENV_FILE" 2>/dev/null; then
+  INFLUX_PASSWORD=$(grep "^INFLUX_PASSWORD=" "$ENV_FILE" | sed 's/^INFLUX_PASSWORD=//')
+else
+  # Generate random password if not in .env
+  INFLUX_PASSWORD=$(openssl rand -base64 12 | tr -d '=+')
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,6 +58,69 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# ============================================================================
+# Handle --rotate-password flag
+# ============================================================================
+if [ "$ROTATE_PASSWORD" = true ]; then
+  echo "╔════════════════════════════════════════════════════════════════╗"
+  echo "║           InfluxDB Password Rotation                           ║"
+  echo "╚════════════════════════════════════════════════════════════════╝"
+  echo ""
+  
+  # Wait for InfluxDB
+  echo -e "${YELLOW}[1/2]${NC} Checking InfluxDB connection..."
+  MAX_RETRIES=10
+  RETRY_COUNT=0
+  while ! curl -s -f "${INFLUX_URL}/health" > /dev/null 2>&1; do
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+      echo -e "${RED}❌ InfluxDB not responding${NC}"
+      exit 1
+    fi
+    sleep 2
+  done
+  echo -e "${GREEN}✅ InfluxDB is running${NC}"
+  echo ""
+  
+  # Generate new password
+  echo -e "${YELLOW}[2/2]${NC} Rotating admin password..."
+  NEW_PASSWORD=$(openssl rand -base64 12 | tr -d '=+')
+  
+  # Change password in InfluxDB
+  docker exec huawei-influxdb influx user change-password \
+    --username "${INFLUX_USERNAME}" \
+    --password "${NEW_PASSWORD}" 2>/dev/null
+  
+  if [ $? -eq 0 ]; then
+    # Save new password to .env
+    if grep -q "^INFLUX_PASSWORD=" "${ENV_FILE}" 2>/dev/null; then
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s|^INFLUX_PASSWORD=.*|INFLUX_PASSWORD=${NEW_PASSWORD}|" "${ENV_FILE}"
+      else
+        sed -i "s|^INFLUX_PASSWORD=.*|INFLUX_PASSWORD=${NEW_PASSWORD}|" "${ENV_FILE}"
+      fi
+    else
+      echo "INFLUX_PASSWORD=${NEW_PASSWORD}" >> "${ENV_FILE}"
+    fi
+    
+    echo -e "${GREEN}✅ Password rotated successfully${NC}"
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║              ✅ Rotation Complete                              ║"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "New credentials saved to .env:"
+    echo "  Username: ${INFLUX_USERNAME}"
+    echo "  Password: (saved in .env)"
+    echo ""
+  else
+    echo -e "${RED}❌ Failed to rotate password${NC}"
+    exit 1
+  fi
+  
+  exit 0
+fi
 
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║           InfluxDB Setup for HuaweiDashboard                   ║"
@@ -260,6 +342,7 @@ update_env() {
 # Save credentials
 update_env "INFLUX_URL" "http://influxdb:8086"
 update_env "INFLUX_TOKEN" "${INFLUX_TOKEN}"
+update_env "INFLUX_PASSWORD" "${INFLUX_PASSWORD}"
 update_env "INFLUX_ORG" "${INFLUX_ORG}"
 update_env "INFLUX_BUCKET" "${INFLUX_BUCKET}"
 update_env "INFLUX_ENABLED" "true"
@@ -286,8 +369,11 @@ echo ""
 echo "  2. Access InfluxDB UI:"
 echo "     http://localhost:8086"
 echo "     Username: ${INFLUX_USERNAME}"
-echo "     Password: ${INFLUX_PASSWORD}"
+echo "     Password: (see .env file)"
 echo ""
 echo "  3. Verify data is being stored:"
 echo "     Check the Bucket 'telemetry' in InfluxDB UI"
+echo ""
+echo "  4. To rotate admin password in the future:"
+echo "     ./backend/scripts/setup-influxdb-v2.sh --rotate-password"
 echo ""
