@@ -1021,7 +1021,10 @@ function handleOcppCall(
           return;
         }
         console.log(`[${chargePointId}] StopTransaction received without API stop request -> keeping smart mode armed (reason=${stopReason}, consecutiveOther=${consecutiveStopReasonOtherCount})`);
-        reconcileChargerControlState('StopTransactionWithoutApiStop');
+        console.log(`[${chargePointId}] Skipping immediate re-arm to allow charger relays to settle. Periodic control loop will re-arm in ${GREEN_CONTROL_LOOP_MS}ms.`);
+        // NOTE: Do NOT call reconcileChargerControlState here. Immediately re-sending RemoteStartTransaction
+        // causes a relay race condition in the Huawei charger (electromechanical contactors cannot toggle
+        // state faster than ~100-200ms). Instead, let the periodic control loop re-arm the charger.
       }
       return;
     }
