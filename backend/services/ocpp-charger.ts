@@ -1167,9 +1167,9 @@ if (ocppWss) {
     sendOcppCall(ws, chargePointId, 'GetConfiguration', {}, 'full configuration snapshot on connect');
     requestSmartChargingConfiguration(ws, chargePointId);
 
-    if (OCPP_SMART_CHARGING_ENABLED && OCPP_SMART_PROBE_ON_CONNECT) {
-      setTimeout(() => runSmartChargingProbe(ws, chargePointId, 'OnConnect'), OCPP_SMART_PROBE_DELAY_MS);
-    }
+    // Smart charging probe is now manual-only via /api/charger/probe-smart endpoint.
+    // Removed automatic probe on connect to prevent collision with charger firmware
+    // during startup/recovery (especially post power-loss).
 
     if (!OCPP_SMART_CHARGING_ENABLED) {
       // Wipe any charging profiles left over from previous smart-charging sessions.
