@@ -410,6 +410,11 @@ async function pollInverter() {
     consumption: inverterData.consumption,
     batterySOC: inverterData.batterySOC,
     gridPower: inverterData.gridPower,
+    // Include PV string voltages and currents for accurate power calculation on frontend
+    pv1Voltage: inverterData.pv1Voltage,
+    pv1Current: inverterData.pv1Current,
+    pv2Voltage: inverterData.pv2Voltage,
+    pv2Current: inverterData.pv2Current,
   }) + '\n';
 
   fs.appendFile(logFile, logEntry, (err) => {
