@@ -95,10 +95,10 @@ if [ "$ALREADY_CONFIGURED" = true ]; then
   HTTP_CODE=$(echo "$CHECK_RESPONSE" | tail -1)
 
   if [ "$HTTP_CODE" == "200" ]; then
-    echo -e "${GREEN}✅ InfluxDB is already configured (credentials verified)${NC}"
+    echo -e "${GREEN}✅ Token is valid (HTTP 200)${NC}"
     ALREADY_CONFIGURED=true
   else
-    echo -e "${YELLOW}⚠️  Token in .env appears invalid (HTTP $HTTP_CODE)${NC}"
+    echo -e "${YELLOW}⚠️  Token in .env is invalid (HTTP $HTTP_CODE)${NC}"
     ALREADY_CONFIGURED=false
   fi
 fi
@@ -109,7 +109,7 @@ echo ""
 # STEP 3: If already configured, show configuration and exit
 # ============================================================================
 if [ "$ALREADY_CONFIGURED" = true ]; then
-  echo -e "${YELLOW}[3/5]${NC} Displaying current configuration..."
+  echo -e "${YELLOW}[3/3]${NC} Displaying current configuration..."
 
   # Try to read from .env
   if [ -f "$ENV_FILE" ]; then
@@ -146,7 +146,7 @@ fi
 # ============================================================================
 # STEP 3 (continued): If NOT configured, initialize InfluxDB
 # ============================================================================
-echo -e "${YELLOW}[3/5]${NC} Initializing InfluxDB (first time setup)..."
+echo -e "${YELLOW}[3/4]${NC} Initializing InfluxDB (first time setup)..."
 
 SETUP_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/json" \
@@ -165,7 +165,57 @@ if echo "$SETUP_RESPONSE" | grep -q '"auth"'; then
   INITIAL_TOKEN=$(echo "$SETUP_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
 elif echo "$SETUP_RESPONSE" | grep -q "already been completed"; then
   echo -e "${BLUE}ℹ️  InfluxDB already initialized (detected 'onboarding completed')${NC}"
-  # Will use influx CLI to generate token in STEP 4
+  # Need to generate a token for the already-initialized InfluxDB
+  # Use admin credentials to get initial access via Basic Auth
+  echo -e "${YELLOW}[3.5/4]${NC} Generating API token..."
+  
+  ADMIN_CREDS=$(echo -n "${INFLUX_USERNAME}:${INFLUX_PASSWORD}" | base64)
+  
+  # Get org ID with Basic auth
+  ORG_RESPONSE=$(curl -s -H "Authorization: Basic ${ADMIN_CREDS}" \
+    "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+  
+  ORG_ID=$(echo "$ORG_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+  
+  if [ -z "$ORG_ID" ]; then
+    echo -e "${RED}❌ Could not retrieve organization ID${NC}"
+    exit 1
+  fi
+  
+  # Get bucket ID
+  BUCKET_RESPONSE=$(curl -s -H "Authorization: Basic ${ADMIN_CREDS}" \
+    "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
+  
+  BUCKET_ID=$(echo "$BUCKET_RESPONSE" | grep -o '"name":"'"${INFLUX_BUCKET}"'"[^}]*"id":"[^"]*' | tail -1 | grep -o '"id":"[^"]*' | cut -d'"' -f4)
+  
+  if [ -z "$BUCKET_ID" ]; then
+    echo -e "${RED}❌ Could not find bucket ID for '${INFLUX_BUCKET}'${NC}"
+    exit 1
+  fi
+  
+  # Generate API token with Basic auth
+  TOKEN_RESPONSE=$(curl -s -X POST \
+    -H "Authorization: Basic ${ADMIN_CREDS}" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"description\": \"HuaweiDashboard API Token\",
+      \"orgID\": \"${ORG_ID}\",
+      \"status\": \"active\",
+      \"permissions\": [
+        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}},
+        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}}
+      ]
+    }" \
+    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
+  
+  INITIAL_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
+  
+  if [ -z "$INITIAL_TOKEN" ] || [ "$INITIAL_TOKEN" = "null" ]; then
+    echo -e "${RED}❌ Failed to generate API token${NC}"
+    exit 1
+  fi
+  
+  echo -e "${GREEN}✅ API token generated${NC}"
 else
   echo -e "${RED}❌ Setup failed${NC}"
   echo "Response: $SETUP_RESPONSE" | head -20
@@ -175,62 +225,19 @@ fi
 echo ""
 
 # ============================================================================
-# STEP 4: Generate API token (reuse existing valid token if it works)
+# STEP 4: Save credentials to .env
 # ============================================================================
-echo -e "${YELLOW}[4/5]${NC} Setting up API credentials..."
+echo -e "${YELLOW}[4/4]${NC} Saving credentials to .env..."
 
-# If we got here and token is invalid, generate a new one from scratch
-# Since we're already past the "already configured" check, we know we need a new token
-
-# We'll use the initial token from fresh setup if available
-if [ -n "$INITIAL_TOKEN" ]; then
-  TOKEN_TO_USE="$INITIAL_TOKEN"
-else
-  # Fallback: token in .env is the one to use
-  TOKEN_TO_USE="$EXISTING_TOKEN"
-fi
-
-if [ -z "$TOKEN_TO_USE" ]; then
-  echo -e "${RED}❌ No valid token available to query InfluxDB${NC}"
-  echo "Unable to proceed. Please delete InfluxDB data and restart:"
-  echo "  docker compose --profile modular down"
-  echo "  docker volume rm huaweidashboard_influxdb-storage"
-  echo "  docker compose --profile modular up -d"
+# At this point, INITIAL_TOKEN should be set from STEP 3
+if [ -z "$INITIAL_TOKEN" ]; then
+  echo -e "${RED}❌ No token available to save${NC}"
   exit 1
 fi
 
-# Extract org ID
-ORG_RESPONSE=$(curl -s -H "Authorization: Token ${TOKEN_TO_USE}" \
-  "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
-
-ORG_ID=$(echo "$ORG_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
-
-if [ -z "$ORG_ID" ]; then
-  echo -e "${RED}❌ Could not retrieve organization ID${NC}"
-  exit 1
-fi
-
-# Extract bucket ID for the telemetry bucket
-BUCKET_RESPONSE=$(curl -s -H "Authorization: Token ${TOKEN_TO_USE}" \
-  "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
-
-BUCKET_ID=$(echo "$BUCKET_RESPONSE" | grep -o '"name":"'"${INFLUX_BUCKET}"'"[^}]*"id":"[^"]*' | tail -1 | grep -o '"id":"[^"]*' | cut -d'"' -f4)
-
-if [ -z "$BUCKET_ID" ]; then
-  echo -e "${RED}❌ Could not find bucket ID for '${INFLUX_BUCKET}'${NC}"
-  exit 1
-fi
-
-# The existing/initial token is already valid - use it as-is
-INFLUX_TOKEN="$TOKEN_TO_USE"
-echo -e "${GREEN}✅ Using valid token for InfluxDB access${NC}"
+INFLUX_TOKEN="$INITIAL_TOKEN"
 
 echo ""
-
-# ============================================================================
-# STEP 5: Save credentials to .env
-# ============================================================================
-echo -e "${YELLOW}[5/5]${NC} Saving credentials to ${ENV_FILE}..."
 
 # Function to update or add env variable
 update_env() {
@@ -261,7 +268,7 @@ echo -e "${GREEN}✅ Credentials saved to ${ENV_FILE}${NC}"
 echo ""
 
 # ============================================================================
-# Final Summary
+# Setup Complete Summary
 # ============================================================================
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║              ✅ Setup Complete                                 ║"
