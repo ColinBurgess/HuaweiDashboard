@@ -148,6 +148,9 @@ fi
 # ============================================================================
 echo -e "${YELLOW}[3/5]${NC} Initializing InfluxDB (first time setup)..."
 
+# Initialize auth header variable (will be set in already-initialized case)
+INITIAL_TOKEN_HEADER=""
+
 SETUP_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/json" \
   -d "{
@@ -165,8 +168,10 @@ if echo "$SETUP_RESPONSE" | grep -q '"auth"'; then
   INITIAL_TOKEN=$(echo "$SETUP_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
 elif echo "$SETUP_RESPONSE" | grep -q "already been completed"; then
   echo -e "${BLUE}ℹ️  InfluxDB already initialized (detected 'onboarding completed')${NC}"
-  # Try to use the default admin credentials to get a token
-  INITIAL_TOKEN="$INFLUX_PASSWORD"
+  # For already-initialized InfluxDB, we'll generate a new token below using admin credentials
+  # Use basic auth with admin credentials to get initial access
+  INITIAL_TOKEN=$(echo -n "${INFLUX_USERNAME}:${INFLUX_PASSWORD}" | base64)
+  INITIAL_TOKEN_HEADER="Basic ${INITIAL_TOKEN}"
 else
   echo -e "${RED}❌ Setup failed${NC}"
   echo "Response: $SETUP_RESPONSE" | head -20
@@ -176,18 +181,63 @@ fi
 echo ""
 
 # ============================================================================
-# STEP 4: Generate API token (with fallback to initial token)
+# STEP 4: Generate API token (with bucket-specific permissions)
 # ============================================================================
 echo -e "${YELLOW}[4/5]${NC} Setting up API credentials..."
 
-# Extract org ID
-ORG_RESPONSE=$(curl -s -H "Authorization: Token ${INITIAL_TOKEN}" \
-  "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+# Extract org ID - use appropriate auth method based on token type
+if [ -n "$INITIAL_TOKEN_HEADER" ]; then
+  # Using Basic auth (already initialized case)
+  ORG_RESPONSE=$(curl -s -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
+    "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+else
+  # Using token auth (fresh setup case)
+  ORG_RESPONSE=$(curl -s -H "Authorization: Token ${INITIAL_TOKEN}" \
+    "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+fi
 
 ORG_ID=$(echo "$ORG_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
 
-if [ -n "$ORG_ID" ]; then
-  # Try to generate a permanent token
+if [ -z "$ORG_ID" ]; then
+  echo -e "${RED}❌ Could not retrieve organization ID${NC}"
+  echo "Response: $(echo "$ORG_RESPONSE" | head -5)"
+  exit 1
+fi
+
+# Extract bucket ID for the telemetry bucket
+if [ -n "$INITIAL_TOKEN_HEADER" ]; then
+  BUCKET_RESPONSE=$(curl -s -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
+    "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
+else
+  BUCKET_RESPONSE=$(curl -s -H "Authorization: Token ${INITIAL_TOKEN}" \
+    "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
+fi
+
+BUCKET_ID=$(echo "$BUCKET_RESPONSE" | grep -o '"name":"'"${INFLUX_BUCKET}"'"[^}]*"id":"[^"]*' | tail -1 | grep -o '"id":"[^"]*' | cut -d'"' -f4)
+
+if [ -z "$BUCKET_ID" ]; then
+  echo -e "${RED}❌ Could not find bucket ID for '${INFLUX_BUCKET}'${NC}"
+  echo "Buckets found:"
+  echo "$BUCKET_RESPONSE" | grep -o '"name":"[^"]*' | head -10
+  exit 1
+fi
+
+# Generate a permanent API token with specific bucket permissions
+if [ -n "$INITIAL_TOKEN_HEADER" ]; then
+  TOKEN_RESPONSE=$(curl -s -X POST \
+    -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"description\": \"HuaweiDashboard API Token\",
+      \"orgID\": \"${ORG_ID}\",
+      \"status\": \"active\",
+      \"permissions\": [
+        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}},
+        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}}
+      ]
+    }" \
+    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
+else
   TOKEN_RESPONSE=$(curl -s -X POST \
     -H "Authorization: Token ${INITIAL_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -196,23 +246,21 @@ if [ -n "$ORG_ID" ]; then
       \"orgID\": \"${ORG_ID}\",
       \"status\": \"active\",
       \"permissions\": [
-        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\"}},
-        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\"}}
+        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}},
+        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}}
       ]
     }" \
-    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null || echo "{}")
+    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
+fi
 
-  NEW_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
-  if [ -n "$NEW_TOKEN" ]; then
-    INFLUX_TOKEN="$NEW_TOKEN"
-    echo -e "${GREEN}✅ API token generated${NC}"
-  else
-    INFLUX_TOKEN="$INITIAL_TOKEN"
-    echo -e "${YELLOW}⚠️  Using default credentials${NC}"
-  fi
+NEW_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
+if [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
+  INFLUX_TOKEN="$NEW_TOKEN"
+  echo -e "${GREEN}✅ API token generated (bucket-specific permissions)${NC}"
 else
-  INFLUX_TOKEN="$INITIAL_TOKEN"
-  echo -e "${YELLOW}⚠️  Using initial setup token${NC}"
+  echo -e "${RED}❌ Failed to generate API token${NC}"
+  echo "Response: $(echo "$TOKEN_RESPONSE" | head -5)"
+  exit 1
 fi
 
 echo ""
