@@ -152,6 +152,19 @@ function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number)
 
 function mapHistoryEntryToPoint(entry: HistoryApiEntry): HistoryPoint {
   const totalSolarDc = entry.inputPower ?? entry.power ?? 0;
+  
+  // If pv1Power and pv2Power are already in the entry (new format), use them directly
+  if (entry.pv1Power !== undefined && entry.pv2Power !== undefined) {
+    return {
+      time: new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      power: totalSolarDc,
+      pv1Power: entry.pv1Power,
+      pv2Power: entry.pv2Power,
+      consumption: Number(entry.consumption ?? 0),
+    };
+  }
+  
+  // Fallback for old format: calculate from voltage/current or use estimated split
   const strings = composeStringPowers(
     totalSolarDc,
     entry.pv1Power ?? ((entry.pv1Voltage ?? 0) * (entry.pv1Current ?? 0)),

@@ -403,6 +403,24 @@ async function pollInverter() {
   // Write to daily history log (JSONL)
   const today = new Date().toISOString().split('T')[0];
   const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
+  
+  // Calculate PV string powers for accurate historical data
+  const pv1Raw = inverterData.pv1Voltage * inverterData.pv1Current;
+  const pv2Raw = inverterData.pv2Voltage * inverterData.pv2Current;
+  const rawSum = Math.max(0, pv1Raw) + Math.max(0, pv2Raw);
+  const totalInput = Math.max(0, inverterData.inputPower);
+  
+  let pv1Power = 0;
+  let pv2Power = 0;
+  if (rawSum > 0) {
+    pv1Power = totalInput * (Math.max(0, pv1Raw) / rawSum);
+    pv2Power = Math.max(0, totalInput - pv1Power);
+  } else if (totalInput > 0) {
+    // No voltage/current data, assume 50/50
+    pv1Power = totalInput / 2;
+    pv2Power = totalInput / 2;
+  }
+  
   const logEntry = JSON.stringify({
     time: inverterData.lastUpdate,
     power: inverterData.activePower,
@@ -410,11 +428,10 @@ async function pollInverter() {
     consumption: inverterData.consumption,
     batterySOC: inverterData.batterySOC,
     gridPower: inverterData.gridPower,
-    // Include PV string voltages and currents for accurate power calculation on frontend
-    pv1Voltage: inverterData.pv1Voltage,
-    pv1Current: inverterData.pv1Current,
-    pv2Voltage: inverterData.pv2Voltage,
-    pv2Current: inverterData.pv2Current,
+    // Store calculated PV powers, not raw voltages/currents
+    // This ensures consistent, accurate distribution in frontend
+    pv1Power: Math.round(pv1Power),
+    pv2Power: Math.round(pv2Power),
   }) + '\n';
 
   fs.appendFile(logFile, logEntry, (err) => {
