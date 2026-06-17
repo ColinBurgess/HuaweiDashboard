@@ -14,6 +14,7 @@ import {
   OCPP_HEARTBEAT_INTERVAL,
   OCPP_CONFIG_DEBOUNCE_MS,
   OCPP_SMART_CHARGING_ENABLED,
+  OCPP_DEBUG_API,
   OCPP_SMART_PROBE_ON_CONNECT,
   OCPP_SMART_PROBE_DELAY_MS,
   OCPP_SMART_PROBE_STACK_LEVEL,
@@ -54,6 +55,50 @@ const isCharger = process.env.SERVICE_ROLE === 'charger' || process.env.START_MO
  * Only initialized if running as charger or monolith
  */
 const ocppHttpServer = isCharger ? createServer((req, res) => {
+  // Optional debug endpoint to forward arbitrary OCPP calls to the charger.
+  // Gated behind OCPP_DEBUG_API for security (full charger control).
+  if (OCPP_DEBUG_API && req.method === 'POST' && req.url === '/debug/ocpp') {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      // Guard against oversized payloads (basic DoS protection).
+      if (body.length > 64 * 1024) {
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body || '{}');
+        const action = String(parsed.action ?? '').trim();
+        const payload = parsed.payload ?? {};
+        if (!action) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing "action" field.' }));
+          return;
+        }
+        if (!chargerWs || chargerWs.readyState !== chargerWs.OPEN) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No charger connected.' }));
+          return;
+        }
+        const chargePointId = chargerState.chargePointId ?? 'UNKNOWN';
+        const callId = sendOcppCall(chargerWs, chargePointId, action, payload, 'debug-api');
+        res.writeHead(callId ? 200 : 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: callId ? 'sent' : 'failed',
+          callId: callId ?? null,
+          chargePointId,
+          action,
+          note: 'Charger response is logged asynchronously (check service logs).',
+        }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON body.' }));
+      }
+    });
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Use WebSocket OCPP endpoint.' }));
 }) : null;

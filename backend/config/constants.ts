@@ -92,6 +92,13 @@ export const OCPP_CONFIG_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
 // letting the charger run at its own default limits.
 export const OCPP_SMART_CHARGING_ENABLED = String(process.env.OCPP_SMART_CHARGING_ENABLED ?? '1').toLowerCase() !== '0';
 
+// When true, exposes a debug HTTP endpoint on the OCPP port that forwards
+// arbitrary OCPP calls to the connected charger (e.g. GetCompositeSchedule,
+// TriggerMessage, ChangeAvailability). Disabled by default for security:
+// it allows full control of the charger and must only be enabled for
+// troubleshooting on a trusted network.
+export const OCPP_DEBUG_API = String(process.env.OCPP_DEBUG_API ?? '0').toLowerCase() === '1';
+
 // Smart Charging Probe Configuration
 export const OCPP_SMART_PROBE_ON_CONNECT = String(process.env.OCPP_SMART_PROBE_ON_CONNECT ?? '1').toLowerCase() !== '0';export const OCPP_SMART_PROBE_DELAY_MS = Number(process.env.OCPP_SMART_PROBE_DELAY_MS ?? 1500);
 export const OCPP_SMART_PROBE_STACK_LEVEL = Number(process.env.OCPP_SMART_PROBE_STACK_LEVEL ?? 2);
