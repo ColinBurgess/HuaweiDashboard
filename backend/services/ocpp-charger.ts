@@ -971,7 +971,11 @@ function handleOcppCall(
         if (inferredCableConnected !== undefined) {
           chargerState.cableConnected = inferredCableConnected;
         }
-        if (chargerState.status !== 'Charging') {
+        // Only clear transactionId when the charger is explicitly available or faulted.
+        // States like Preparing, SuspendedEVSE, etc. are intermediate states where the
+        // transaction remains active. Clearing transactionId in those states causes loss
+        // of reference and prevents proper charge control logic.
+        if (chargerState.status === 'Available' || chargerState.status === 'Faulted') {
           chargerState.powerW = 0;
           chargerState.transactionId = undefined;
         }
