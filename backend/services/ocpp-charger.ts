@@ -1034,6 +1034,13 @@ if (ocppWss) {
       setTimeout(() => runSmartChargingProbe(ws, chargePointId, 'OnConnect'), OCPP_SMART_PROBE_DELAY_MS);
     }
 
+    if (!OCPP_SMART_CHARGING_ENABLED) {
+      // Wipe any charging profiles left over from previous smart-charging sessions.
+      // An empty ClearChargingProfile payload removes ALL installed profiles, so the
+      // charger behaves like the original pre-refactor flow (no imposed limits).
+      sendOcppCall(ws, chargePointId, 'ClearChargingProfile', {}, 'clear ALL charging profiles (smart charging disabled)');
+    }
+
     reconcileChargerControlState('WebSocketConnected');
 
     ws.on('message', (raw) => {
