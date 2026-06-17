@@ -63,7 +63,7 @@ export async function sendTelegramAlert(alert: TelegramAlert): Promise<boolean> 
 
   // Format timestamp with timezone-aware locale string
   const now = new Date();
-  const timestamp = now.toLocaleString('es-ES', { 
+  const timestamp = now.toLocaleString('es-ES', {
     timeZone: 'Europe/Madrid',
     year: 'numeric',
     month: '2-digit',

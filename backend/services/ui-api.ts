@@ -68,7 +68,7 @@ let lastLogPosition = 0;
  */
 function storeLiveLog(entry: RuntimeLogEntry) {
   liveLogs.push(entry);
-  
+
   // If we exceed max logs, remove oldest entry from the service with most logs
   if (liveLogs.length > MAX_LIVE_LOGS) {
     // Count logs by source
@@ -76,10 +76,10 @@ function storeLiveLog(entry: RuntimeLogEntry) {
     for (const log of liveLogs) {
       sourceCount[log.source] = (sourceCount[log.source] || 0) + 1;
     }
-    
+
     // Find service with most logs
     const maxSource = Object.entries(sourceCount).sort((a, b) => b[1] - a[1])[0]?.[0];
-    
+
     if (maxSource) {
       // Remove oldest log from that service
       const idx = liveLogs.findIndex(log => log.source === maxSource);
@@ -91,7 +91,7 @@ function storeLiveLog(entry: RuntimeLogEntry) {
       liveLogs.splice(0, 1);
     }
   }
-  
+
   if (io) {
     io.emit('server-log', entry);
   }
@@ -303,6 +303,12 @@ if (app) {
   /**
    * GET /api/stats/summary
    * Get statistics for today
+   *
+   * 🚧 WIP: Energy Statistics section needs refinement
+   *    - Query logic implemented and working
+   *    - UI display in frontend needs improvement
+   *    - Period calculations may need optimization
+   *    - Marked for enhancement in future development sessions
    */
   app.get('/api/stats/summary', async (req, res) => {
     try {

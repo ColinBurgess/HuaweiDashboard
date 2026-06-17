@@ -47,6 +47,7 @@ services:
     env_file: .env
     environment:
       - TZ=Europe/Madrid
+      - SERVICE_ROLE=collector
     profiles:
       - modular
     depends_on:
@@ -72,3 +73,36 @@ services:
     volumes:
       - ./storage:/app/storage
     command: ["pnpm", "run", "service:charger"]
+
+  # =========================================================
+  # InfluxDB: Time-series database for telemetry
+  # =========================================================
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: huawei-influxdb
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Madrid
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:-huawei2024}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG:-huawei-dashboard}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET:-telemetry}
+      - DOCKER_INFLUXDB_INIT_RETENTION=0
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN}
+    profiles:
+      - dev
+      - modular
+      - monolith
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  influxdb_data:

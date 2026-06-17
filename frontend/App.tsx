@@ -152,7 +152,7 @@ function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number)
 
 function mapHistoryEntryToPoint(entry: HistoryApiEntry): HistoryPoint {
   const totalSolarDc = entry.inputPower ?? entry.power ?? 0;
-  
+
   // If pv1Power and pv2Power are already in the entry (new format), use them directly
   if (entry.pv1Power !== undefined && entry.pv2Power !== undefined) {
     return {
@@ -163,7 +163,7 @@ function mapHistoryEntryToPoint(entry: HistoryApiEntry): HistoryPoint {
       consumption: Number(entry.consumption ?? 0),
     };
   }
-  
+
   // Fallback for old format: calculate from voltage/current or use estimated split
   const strings = composeStringPowers(
     totalSolarDc,
@@ -243,7 +243,7 @@ export default function App() {
         } else if (statsPeriod === 'year') {
           url += `year=${statsDate.getFullYear()}`;
         }
-        
+
         const res = await fetch(url);
         const data = await res.json();
         setStatsData(data);
@@ -611,7 +611,7 @@ export default function App() {
             </nav>
 
             <div className="h-8 w-px bg-white/10 hidden md:block" />
-            
+
             <div className="hidden md:flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-wider text-gray-500">System Status</span>
               <div className="flex items-center gap-2">
@@ -1213,7 +1213,7 @@ export default function App() {
                   <PieChartIcon className="w-4 h-4 text-indigo-400" />
                   Daily Energy Balance
                 </h3>
-                <button 
+                <button
                   onClick={() => {
                     // Trigger stats refresh by toggling a temp state or just calling the API
                     // For simplicity, we can just trigger a re-fetch if we expose the function
@@ -1229,7 +1229,7 @@ export default function App() {
                   <RefreshCcw className="w-3.5 h-3.5" />
                 </button>
               </div>
-              
+
               <div className="flex gap-4">
                 {/* Production Pie */}
                 <div className="flex-1 flex flex-col items-center">
@@ -1249,7 +1249,7 @@ export default function App() {
                           <Cell fill="#818cf8" /> {/* Indigo 400 */}
                           <Cell fill="#10b981" /> {/* Emerald 500 */}
                         </Pie>
-                        <Tooltip 
+                        <Tooltip
                           contentStyle={{ backgroundColor: '#000', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
                           itemStyle={{ color: '#ccc' }}
                           formatter={(value: number, name: string) => [`${value.toFixed(2)} kWh`, name]}
@@ -1279,7 +1279,7 @@ export default function App() {
                           <Cell fill="#22d3ee" /> {/* Cyan 400 */}
                           <Cell fill="#ef4444" /> {/* Red 500 */}
                         </Pie>
-                        <Tooltip 
+                        <Tooltip
                           contentStyle={{ backgroundColor: '#000', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
                           itemStyle={{ color: '#ccc' }}
                           formatter={(value: number, name: string) => [`${value.toFixed(2)} kWh`, name]}
@@ -1340,14 +1340,14 @@ export default function App() {
             <RefreshCcw className="w-4 h-4 text-indigo-400" />
             System Health & Service Status
           </h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {['collector', 'charger', 'dashboard'].map((role) => {
               const service = data?.services?.[role];
               const lastHeartbeat = service?.lastHeartbeat;
               const isOnline = lastHeartbeat && (Date.now() - new Date(lastHeartbeat).getTime()) < 30000;
               const isWarning = lastHeartbeat && (Date.now() - new Date(lastHeartbeat).getTime()) >= 30000 && (Date.now() - new Date(lastHeartbeat).getTime()) < 90000;
-              
+
               return (
                 <div key={role} className="bg-black/30 border border-white/5 rounded-xl p-4 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
@@ -1367,7 +1367,7 @@ export default function App() {
                       {isOnline ? 'ONLINE' : 'OFFLINE'}
                     </span>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-tighter">
                       <span>Status</span>
@@ -1418,7 +1418,7 @@ export default function App() {
                 <span className="px-3 py-1 bg-black/40 border border-white/10 rounded-lg text-[10px] font-mono text-cyan-400 uppercase tracking-widest">
                   {liveLogs.length} Entries
                 </span>
-                <button 
+                <button
                   onClick={() => setLiveLogs([])}
                   className="px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] font-bold text-red-400 uppercase tracking-widest hover:bg-red-500/20 transition-colors"
                 >
@@ -1441,8 +1441,8 @@ export default function App() {
                   </div>
                 ) : (
                   liveLogs.slice().reverse().map((entry, index) => (
-                    <div 
-                      key={`${entry.time}-${index}`} 
+                    <div
+                      key={`${entry.time}-${index}`}
                       className="grid grid-cols-[100px_80px_110px_1fr] px-4 py-2.5 hover:bg-white/[0.02] border-b border-white/5 last:border-b-0 transition-colors group"
                     >
                       <span className="text-[11px] font-mono text-gray-500 group-hover:text-gray-400">
@@ -1474,7 +1474,7 @@ export default function App() {
                 )}
               </div>
             </div>
-            
+
             <div className="mt-4 p-4 rounded-xl bg-blue-500/5 border border-blue-500/10 flex items-center gap-3">
               <Info className="w-4 h-4 text-blue-400" />
               <p className="text-[11px] text-blue-300/80 leading-relaxed">
@@ -1506,13 +1506,13 @@ export default function App() {
               <div className="flex flex-col items-end gap-2">
                 <div className="flex items-center gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
                   {['Day', 'Month', 'Year'].map((p) => (
-                    <button 
-                      key={p} 
+                    <button
+                      key={p}
                       onClick={() => setStatsPeriod(p.toLowerCase() as any)}
                       className={cn(
-                        "px-4 py-1.5 text-xs font-bold rounded-lg transition-all uppercase tracking-wider", 
-                        statsPeriod === p.toLowerCase() 
-                          ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" 
+                        "px-4 py-1.5 text-xs font-bold rounded-lg transition-all uppercase tracking-wider",
+                        statsPeriod === p.toLowerCase()
+                          ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
                           : "text-gray-500 hover:text-gray-300"
                       )}
                     >
@@ -1520,9 +1520,9 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                
+
                 <div className="flex items-center gap-4 bg-black/20 px-3 py-1.5 rounded-lg border border-white/5">
-                  <button 
+                  <button
                     onClick={() => {
                       const newDate = new Date(statsDate);
                       if (statsPeriod === 'day') newDate.setDate(newDate.getDate() - 1);
@@ -1539,7 +1539,7 @@ export default function App() {
                     {statsPeriod === 'month' && statsDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
                     {statsPeriod === 'year' && statsDate.getFullYear()}
                   </span>
-                  <button 
+                  <button
                     onClick={() => {
                       const newDate = new Date(statsDate);
                       if (statsPeriod === 'day') newDate.setDate(newDate.getDate() + 1);

@@ -403,13 +403,13 @@ async function pollInverter() {
   // Write to daily history log (JSONL)
   const today = new Date().toISOString().split('T')[0];
   const logFile = path.join(HISTORY_DIR, `${today}.jsonl`);
-  
+
   // Calculate PV string powers for accurate historical data
   const pv1Raw = inverterData.pv1Voltage * inverterData.pv1Current;
   const pv2Raw = inverterData.pv2Voltage * inverterData.pv2Current;
   const rawSum = Math.max(0, pv1Raw) + Math.max(0, pv2Raw);
   const totalInput = Math.max(0, inverterData.inputPower);
-  
+
   let pv1Power = 0;
   let pv2Power = 0;
   if (rawSum > 0) {
@@ -420,7 +420,7 @@ async function pollInverter() {
     pv1Power = totalInput / 2;
     pv2Power = totalInput / 2;
   }
-  
+
   const logEntry = JSON.stringify({
     time: inverterData.lastUpdate,
     power: inverterData.activePower,
