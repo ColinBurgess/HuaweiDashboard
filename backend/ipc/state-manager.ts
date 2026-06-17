@@ -287,6 +287,11 @@ export function saveLiveState() {
       dataToSave.services = { [role]: inverterData.services[role] };
     }
 
+    // DEBUG: Log if collector is saving gridPower
+    if (role === 'collector' && inverterData.gridPower !== undefined) {
+      console.log(`[SAVE-STATE] Collector saving gridPower=${inverterData.gridPower}W to ${targetFile}`);
+    }
+
     // Escritura atómica para prevenir lecturas corruptas de otros contenedores
     const tmpFile = `${targetFile}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(dataToSave, null, 2), 'utf8');
@@ -333,6 +338,11 @@ export function loadLiveState() {
 
       const modeChanged = data.chargingMode && data.chargingMode !== inverterData.chargingMode;
       const startChanged = data.chargerStartRequested !== undefined && data.chargerStartRequested !== inverterData.chargerStartRequested;
+
+      // DEBUG: Log if charger is receiving gridPower from collector
+      if (role === 'charger' && file === 'live-state-collector.json' && data.gridPower !== undefined) {
+        console.log(`[LOAD-STATE] Charger loaded gridPower=${data.gridPower}W from collector file`);
+      }
 
       Object.assign(inverterData, data);
 
