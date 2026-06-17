@@ -67,7 +67,7 @@ if [ "$ROTATE_PASSWORD" = true ]; then
   echo "║           InfluxDB Password Rotation                           ║"
   echo "╚════════════════════════════════════════════════════════════════╝"
   echo ""
-  
+
   # Wait for InfluxDB
   echo -e "${YELLOW}[1/2]${NC} Checking InfluxDB connection..."
   MAX_RETRIES=10
@@ -82,16 +82,16 @@ if [ "$ROTATE_PASSWORD" = true ]; then
   done
   echo -e "${GREEN}✅ InfluxDB is running${NC}"
   echo ""
-  
+
   # Generate new password
   echo -e "${YELLOW}[2/2]${NC} Rotating admin password..."
   NEW_PASSWORD=$(openssl rand -base64 12 | tr -d '=+')
-  
+
   # Change password in InfluxDB
   docker exec huawei-influxdb influx user change-password \
     --username "${INFLUX_USERNAME}" \
     --password "${NEW_PASSWORD}" 2>/dev/null
-  
+
   if [ $? -eq 0 ]; then
     # Save new password to .env
     if grep -q "^INFLUX_PASSWORD=" "${ENV_FILE}" 2>/dev/null; then
@@ -103,7 +103,7 @@ if [ "$ROTATE_PASSWORD" = true ]; then
     else
       echo "INFLUX_PASSWORD=${NEW_PASSWORD}" >> "${ENV_FILE}"
     fi
-    
+
     echo -e "${GREEN}✅ Password rotated successfully${NC}"
     echo ""
     echo "╔════════════════════════════════════════════════════════════════╗"
@@ -118,7 +118,7 @@ if [ "$ROTATE_PASSWORD" = true ]; then
     echo -e "${RED}❌ Failed to rotate password${NC}"
     exit 1
   fi
-  
+
   exit 0
 fi
 
@@ -250,31 +250,31 @@ elif echo "$SETUP_RESPONSE" | grep -q "already been completed"; then
   # Need to generate a token for the already-initialized InfluxDB
   # Use admin credentials to get initial access via Basic Auth
   echo -e "${YELLOW}[3.5/4]${NC} Generating API token..."
-  
+
   ADMIN_CREDS=$(echo -n "${INFLUX_USERNAME}:${INFLUX_PASSWORD}" | base64)
-  
+
   # Get org ID with Basic auth
   ORG_RESPONSE=$(curl -s -H "Authorization: Basic ${ADMIN_CREDS}" \
     "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
-  
+
   ORG_ID=$(echo "$ORG_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
-  
+
   if [ -z "$ORG_ID" ]; then
     echo -e "${RED}❌ Could not retrieve organization ID${NC}"
     exit 1
   fi
-  
+
   # Get bucket ID
   BUCKET_RESPONSE=$(curl -s -H "Authorization: Basic ${ADMIN_CREDS}" \
     "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
-  
+
   BUCKET_ID=$(echo "$BUCKET_RESPONSE" | grep -o '"name":"'"${INFLUX_BUCKET}"'"[^}]*"id":"[^"]*' | tail -1 | grep -o '"id":"[^"]*' | cut -d'"' -f4)
-  
+
   if [ -z "$BUCKET_ID" ]; then
     echo -e "${RED}❌ Could not find bucket ID for '${INFLUX_BUCKET}'${NC}"
     exit 1
   fi
-  
+
   # Generate API token with Basic auth
   TOKEN_RESPONSE=$(curl -s -X POST \
     -H "Authorization: Basic ${ADMIN_CREDS}" \
@@ -289,14 +289,14 @@ elif echo "$SETUP_RESPONSE" | grep -q "already been completed"; then
       ]
     }" \
     "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
-  
+
   INITIAL_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
-  
+
   if [ -z "$INITIAL_TOKEN" ] || [ "$INITIAL_TOKEN" = "null" ]; then
     echo -e "${RED}❌ Failed to generate API token${NC}"
     exit 1
   fi
-  
+
   echo -e "${GREEN}✅ API token generated${NC}"
 else
   echo -e "${RED}❌ Setup failed${NC}"

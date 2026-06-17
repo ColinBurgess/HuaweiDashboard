@@ -41,6 +41,7 @@ export const SLAVE_ID = 1;
 export const MODBUS_RECONNECT_DELAY_MS = 10_000;
 export const MODBUS_PORT_ROTATE_THRESHOLD = 3;
 export const MODBUS_HAS_BATTERY = String(process.env.MODBUS_HAS_BATTERY ?? 'true').toLowerCase() !== 'false';
+export const MODBUS_POLLING_INTERVAL = Number(process.env.MODBUS_POLLING_INTERVAL ?? 1000);
 
 /**
  * Modbus register map for inverter telemetry

@@ -16,6 +16,7 @@ import {
   SLAVE_ID,
   MODBUS_REGISTRY_MAP,
   MODBUS_HAS_BATTERY,
+  MODBUS_POLLING_INTERVAL,
   HISTORY_DIR,
   DATA_DIR,
 } from '../config/constants.js';
@@ -480,7 +481,7 @@ export async function startInverterService() {
   // Restore charger state from disk and start polling
   restorePersistedChargerState();
   connectModbus();
-  setInterval(pollInverter, 1000);
+  setInterval(pollInverter, MODBUS_POLLING_INTERVAL);
 
   // Send health heartbeat
   setInterval(() => {
