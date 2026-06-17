@@ -140,7 +140,9 @@ function composeStringPowers(totalPower: number, pv1Raw: number, pv2Raw: number)
 
   if (rawSum <= 0) {
     // Fallback when no per-string measurements are available.
-    return { pv1Power: safeTotal, pv2Power: 0 };
+    // Instead of putting all power in PV1, assume 50/50 distribution
+    // This is more accurate when historical data lacks voltage/current fields
+    return { pv1Power: safeTotal / 2, pv2Power: safeTotal / 2 };
   }
 
   const pv1Power = safeTotal * (safePv1 / rawSum);
