@@ -13,6 +13,7 @@ import {
   OCPP_PATH_PREFIX,
   OCPP_HEARTBEAT_INTERVAL,
   OCPP_CONFIG_DEBOUNCE_MS,
+  OCPP_SMART_CHARGING_ENABLED,
   OCPP_SMART_PROBE_ON_CONNECT,
   OCPP_SMART_PROBE_DELAY_MS,
   OCPP_SMART_PROBE_STACK_LEVEL,
@@ -438,6 +439,10 @@ function sendRemoteStopTransaction(): boolean {
  * Sets the maximum current/power for the charging transaction
  */
 function sendChargingLimit(amps: number): boolean {
+  if (!OCPP_SMART_CHARGING_ENABLED) {
+    // Original pre-refactor behaviour: no SetChargingProfile, charger uses its own default limit
+    return false;
+  }
   if (!canSendToCharger() || !chargerWs) {
     return false;
   }
@@ -562,8 +567,7 @@ function applyGreenChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-  // Only start a NEW transaction if we don't have an active one
-  if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
+  if (chargerState.status !== 'Charging') {
     sendRemoteStartTransaction();
   }
 }
@@ -611,8 +615,7 @@ function applyHybridChargingPolicy(): void {
   if (shouldUpdateLimit) {
     sendChargingLimit(boundedTargetAmps);
   }
-  // Only start a NEW transaction if we don't have an active one
-  if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
+  if (chargerState.status !== 'Charging') {
     sendRemoteStartTransaction();
   }
 }
@@ -743,11 +746,11 @@ function reconcileChargerControlState(trigger: string): void {
   }
 
   if (chargerState.chargingMode === 'FAST') {
-    if (chargerState.status !== 'Charging' && !chargerState.transactionId) {
+    if (chargerState.status !== 'Charging') {
       console.log('[RECON] FAST mode start — sending max limit and start command');
       sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
       sendRemoteStartTransaction();
-    } else if (chargerState.status === 'Charging') {
+    } else {
       console.log('[RECON] FAST mode active and charging, ensuring max limit');
       if (chargerState.appliedCurrentLimitA !== GREEN_MAX_CHARGING_AMPS) {
         sendChargingLimit(GREEN_MAX_CHARGING_AMPS);
@@ -882,9 +885,7 @@ function handleOcppCall(
         }
         if (chargerState.status !== 'Charging') {
           chargerState.powerW = 0;
-          // IMPORTANT: Do NOT clear transactionId on status changes
-          // Transactions persist across Unavailable/Available status changes
-          // Only StopTransaction should clear transactionId
+          chargerState.transactionId = undefined;
         }
       }
       chargerState.lastUpdate = new Date().toISOString();
@@ -1029,7 +1030,7 @@ if (ocppWss) {
     sendOcppCall(ws, chargePointId, 'GetConfiguration', {}, 'full configuration snapshot on connect');
     requestSmartChargingConfiguration(ws, chargePointId);
 
-    if (OCPP_SMART_PROBE_ON_CONNECT) {
+    if (OCPP_SMART_CHARGING_ENABLED && OCPP_SMART_PROBE_ON_CONNECT) {
       setTimeout(() => runSmartChargingProbe(ws, chargePointId, 'OnConnect'), OCPP_SMART_PROBE_DELAY_MS);
     }
 

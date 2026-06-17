@@ -87,9 +87,13 @@ export const OCPP_PATH_PREFIX = process.env.OCPP_PATH_PREFIX ?? '/ocpp';
 export const OCPP_HEARTBEAT_INTERVAL = Number(process.env.OCPP_HEARTBEAT_INTERVAL ?? 30);
 export const OCPP_CONFIG_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
 
+// When false, the charger is driven like the original pre-refactor flow:
+// only RemoteStartTransaction is sent and no SetChargingProfile / probe is applied,
+// letting the charger run at its own default limits.
+export const OCPP_SMART_CHARGING_ENABLED = String(process.env.OCPP_SMART_CHARGING_ENABLED ?? '1').toLowerCase() !== '0';
+
 // Smart Charging Probe Configuration
-export const OCPP_SMART_PROBE_ON_CONNECT = String(process.env.OCPP_SMART_PROBE_ON_CONNECT ?? '1').toLowerCase() !== '0';
-export const OCPP_SMART_PROBE_DELAY_MS = Number(process.env.OCPP_SMART_PROBE_DELAY_MS ?? 1500);
+export const OCPP_SMART_PROBE_ON_CONNECT = String(process.env.OCPP_SMART_PROBE_ON_CONNECT ?? '1').toLowerCase() !== '0';export const OCPP_SMART_PROBE_DELAY_MS = Number(process.env.OCPP_SMART_PROBE_DELAY_MS ?? 1500);
 export const OCPP_SMART_PROBE_STACK_LEVEL = Number(process.env.OCPP_SMART_PROBE_STACK_LEVEL ?? 2);
 export const OCPP_SMART_PROBE_CP_MAX_AMPS = Number(process.env.OCPP_SMART_PROBE_CP_MAX_AMPS ?? 8);
 export const OCPP_SMART_PROBE_TX_AMPS = Number(process.env.OCPP_SMART_PROBE_TX_AMPS ?? 10);
