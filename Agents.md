@@ -49,6 +49,7 @@ No utilizamos Redis ni colas de mensajes. La comunicación se realiza a través 
 2.  **Propiedad de Campos**: Cada servicio debe ser el "dueño" único de sus campos al guardar en disco. El Inversor no debe guardar el estado del Cargador, y viceversa.
 3.  **TS Lint en Docker**: Un error de sintaxis o un duplicado en `server.ts` detiene todo el despliegue modular debido al paso de `npm run lint` en el Dockerfile. Siempre verificar duplicados tras refactorizaciones grandes.
 4.  **Carga Selectiva**: Al cargar estados de otros, un servicio debe ignorar su propio archivo en disco para evitar que su memoria viva sea "pisada" por un estado antiguo persistido.
+5.  **Instancias Simultáneas y Modbus**: **CRÍTICO** - No ejecutar la aplicación simultáneamente en dos máquinas/contextos si ambas intentan conectar al mismo inversor. Modbus TCP es single-connection; si hay dos instancias del collector service compitiendo, la conexión se cierra intermitentemente. Esto causa falsos problemas de "socket closes immediately". Verificar siempre: (a) Docker en servidor está corriendo, (b) Desarrollo local está detenido, o viceversa. Usar `docker compose ps` y revisar qué instancias están activas antes de hacer debugging de Modbus.
 
 ## Arquitectura Futura (Sugerencias)
 -   **OpenAPI / Internals API**: Sustituir el sistema de archivos compartidos por una API REST interna o gRPC para comandos (ej: Dashboard -> Charger).
