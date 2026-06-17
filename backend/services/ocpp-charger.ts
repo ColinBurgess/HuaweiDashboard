@@ -880,7 +880,9 @@ function handleOcppCall(
         }
         if (chargerState.status !== 'Charging') {
           chargerState.powerW = 0;
-          chargerState.transactionId = undefined;
+          // IMPORTANT: Do NOT clear transactionId on status changes
+          // Transactions persist across Unavailable/Available status changes
+          // Only StopTransaction should clear transactionId
         }
       }
       chargerState.lastUpdate = new Date().toISOString();
