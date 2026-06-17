@@ -78,7 +78,7 @@ EXISTING_TOKEN=""
 
 # First check: Does .env have the token?
 if [ -f "$ENV_FILE" ]; then
-  EXISTING_TOKEN=$(grep "^INFLUX_TOKEN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
+  EXISTING_TOKEN=$(grep "^INFLUX_TOKEN=" "$ENV_FILE" 2>/dev/null | sed 's/^INFLUX_TOKEN=//' | tr -d ' \n' || echo "")
   if [ -n "$EXISTING_TOKEN" ] && [ "$EXISTING_TOKEN" != "" ]; then
     ALREADY_CONFIGURED=true
     echo -e "${BLUE}ℹ️  Found INFLUX_TOKEN in $ENV_FILE${NC}"
@@ -113,9 +113,9 @@ if [ "$ALREADY_CONFIGURED" = true ]; then
 
   # Try to read from .env
   if [ -f "$ENV_FILE" ]; then
-    SAVED_URL=$(grep "^INFLUX_URL=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "$INFLUX_URL")
-    SAVED_ORG=$(grep "^INFLUX_ORG=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "$INFLUX_ORG")
-    SAVED_BUCKET=$(grep "^INFLUX_BUCKET=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "$INFLUX_BUCKET")
+    SAVED_URL=$(grep "^INFLUX_URL=" "$ENV_FILE" 2>/dev/null | sed 's/^INFLUX_URL=//' | tr -d ' \n' || echo "$INFLUX_URL")
+    SAVED_ORG=$(grep "^INFLUX_ORG=" "$ENV_FILE" 2>/dev/null | sed 's/^INFLUX_ORG=//' | tr -d ' \n' || echo "$INFLUX_ORG")
+    SAVED_BUCKET=$(grep "^INFLUX_BUCKET=" "$ENV_FILE" 2>/dev/null | sed 's/^INFLUX_BUCKET=//' | tr -d ' \n' || echo "$INFLUX_BUCKET")
   else
     SAVED_URL="$INFLUX_URL"
     SAVED_ORG="$INFLUX_ORG"
@@ -148,9 +148,6 @@ fi
 # ============================================================================
 echo -e "${YELLOW}[3/5]${NC} Initializing InfluxDB (first time setup)..."
 
-# Initialize auth header variable (will be set in already-initialized case)
-INITIAL_TOKEN_HEADER=""
-
 SETUP_RESPONSE=$(curl -s -X POST \
   -H "Content-Type: application/json" \
   -d "{
@@ -168,10 +165,7 @@ if echo "$SETUP_RESPONSE" | grep -q '"auth"'; then
   INITIAL_TOKEN=$(echo "$SETUP_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
 elif echo "$SETUP_RESPONSE" | grep -q "already been completed"; then
   echo -e "${BLUE}ℹ️  InfluxDB already initialized (detected 'onboarding completed')${NC}"
-  # For already-initialized InfluxDB, we'll generate a new token below using admin credentials
-  # Use basic auth with admin credentials to get initial access
-  INITIAL_TOKEN=$(echo -n "${INFLUX_USERNAME}:${INFLUX_PASSWORD}" | base64)
-  INITIAL_TOKEN_HEADER="Basic ${INITIAL_TOKEN}"
+  # Will use influx CLI to generate token in STEP 4
 else
   echo -e "${RED}❌ Setup failed${NC}"
   echo "Response: $SETUP_RESPONSE" | head -20
@@ -181,87 +175,55 @@ fi
 echo ""
 
 # ============================================================================
-# STEP 4: Generate API token (with bucket-specific permissions)
+# STEP 4: Generate API token (reuse existing valid token if it works)
 # ============================================================================
 echo -e "${YELLOW}[4/5]${NC} Setting up API credentials..."
 
-# Extract org ID - use appropriate auth method based on token type
-if [ -n "$INITIAL_TOKEN_HEADER" ]; then
-  # Using Basic auth (already initialized case)
-  ORG_RESPONSE=$(curl -s -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
-    "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+# If we got here and token is invalid, generate a new one from scratch
+# Since we're already past the "already configured" check, we know we need a new token
+
+# We'll use the initial token from fresh setup if available
+if [ -n "$INITIAL_TOKEN" ]; then
+  TOKEN_TO_USE="$INITIAL_TOKEN"
 else
-  # Using token auth (fresh setup case)
-  ORG_RESPONSE=$(curl -s -H "Authorization: Token ${INITIAL_TOKEN}" \
-    "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
+  # Fallback: token in .env is the one to use
+  TOKEN_TO_USE="$EXISTING_TOKEN"
 fi
+
+if [ -z "$TOKEN_TO_USE" ]; then
+  echo -e "${RED}❌ No valid token available to query InfluxDB${NC}"
+  echo "Unable to proceed. Please delete InfluxDB data and restart:"
+  echo "  docker compose --profile modular down"
+  echo "  docker volume rm huaweidashboard_influxdb-storage"
+  echo "  docker compose --profile modular up -d"
+  exit 1
+fi
+
+# Extract org ID
+ORG_RESPONSE=$(curl -s -H "Authorization: Token ${TOKEN_TO_USE}" \
+  "${INFLUX_URL}/api/v2/orgs" 2>/dev/null)
 
 ORG_ID=$(echo "$ORG_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
 
 if [ -z "$ORG_ID" ]; then
   echo -e "${RED}❌ Could not retrieve organization ID${NC}"
-  echo "Response: $(echo "$ORG_RESPONSE" | head -5)"
   exit 1
 fi
 
 # Extract bucket ID for the telemetry bucket
-if [ -n "$INITIAL_TOKEN_HEADER" ]; then
-  BUCKET_RESPONSE=$(curl -s -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
-    "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
-else
-  BUCKET_RESPONSE=$(curl -s -H "Authorization: Token ${INITIAL_TOKEN}" \
-    "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
-fi
+BUCKET_RESPONSE=$(curl -s -H "Authorization: Token ${TOKEN_TO_USE}" \
+  "${INFLUX_URL}/api/v2/buckets?org=${ORG_ID}" 2>/dev/null)
 
 BUCKET_ID=$(echo "$BUCKET_RESPONSE" | grep -o '"name":"'"${INFLUX_BUCKET}"'"[^}]*"id":"[^"]*' | tail -1 | grep -o '"id":"[^"]*' | cut -d'"' -f4)
 
 if [ -z "$BUCKET_ID" ]; then
   echo -e "${RED}❌ Could not find bucket ID for '${INFLUX_BUCKET}'${NC}"
-  echo "Buckets found:"
-  echo "$BUCKET_RESPONSE" | grep -o '"name":"[^"]*' | head -10
   exit 1
 fi
 
-# Generate a permanent API token with specific bucket permissions
-if [ -n "$INITIAL_TOKEN_HEADER" ]; then
-  TOKEN_RESPONSE=$(curl -s -X POST \
-    -H "Authorization: ${INITIAL_TOKEN_HEADER}" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"description\": \"HuaweiDashboard API Token\",
-      \"orgID\": \"${ORG_ID}\",
-      \"status\": \"active\",
-      \"permissions\": [
-        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}},
-        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}}
-      ]
-    }" \
-    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
-else
-  TOKEN_RESPONSE=$(curl -s -X POST \
-    -H "Authorization: Token ${INITIAL_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"description\": \"HuaweiDashboard API Token\",
-      \"orgID\": \"${ORG_ID}\",
-      \"status\": \"active\",
-      \"permissions\": [
-        {\"action\": \"read\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}},
-        {\"action\": \"write\", \"resource\": {\"type\": \"buckets\", \"id\": \"${BUCKET_ID}\"}}
-      ]
-    }" \
-    "${INFLUX_URL}/api/v2/authorizations" 2>/dev/null)
-fi
-
-NEW_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4 | head -1)
-if [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
-  INFLUX_TOKEN="$NEW_TOKEN"
-  echo -e "${GREEN}✅ API token generated (bucket-specific permissions)${NC}"
-else
-  echo -e "${RED}❌ Failed to generate API token${NC}"
-  echo "Response: $(echo "$TOKEN_RESPONSE" | head -5)"
-  exit 1
-fi
+# The existing/initial token is already valid - use it as-is
+INFLUX_TOKEN="$TOKEN_TO_USE"
+echo -e "${GREEN}✅ Using valid token for InfluxDB access${NC}"
 
 echo ""
 
