@@ -37,12 +37,23 @@ No utilizamos Redis ni colas de mensajes. La comunicación se realiza a través 
 -   **Despliegue Monolito**: `docker compose --profile monolith up -d --build`
 -   **Logs de un servicio**: `docker logs huawei-charger-service --tail 50`
 
-## Estado Actual (10 Mayo 2026)
+## Estado Actual (19 Junio 2026)
 -   [x] Migración a servicios completada.
 -   [x] Sincronización de excedente solar hacia el cargador corregida.
 -   [x] Sistema de logs unificado implementado.
 -   [x] Panel de salud de servicios (Health Monitor) operativo.
 -   [x] **Resuelto**: Problema de colisión de archivos mediante propiedad estricta de campos (`live-state-*.json`).
+-   [x] **NUEVO (19 Jun)**: Sistema de reconexión automática con exponential backoff en collector.
+    - Detecta 3+ timeouts consecutivos → fuerza disconnect + reconnect inmediato
+    - Exponential backoff: 5s → 10s → 20s... máx 2 minutos
+    - Watchdog cada 30s: si offline >60s, fuerza intento de reconexión
+    - Reset automático cuando conecta exitosamente
+-   [x] **NUEVO (19 Jun)**: Skills especializados en `_skills/` para debugging y desarrollo futuro.
+    - [HUAWEI-IPC-STATE-MANAGEMENT.md](_skills/HUAWEI-IPC-STATE-MANAGEMENT.md) → Comunicación inter-procesos
+    - [HUAWEI-MODBUS-COLLECTOR.md](_skills/HUAWEI-MODBUS-COLLECTOR.md) → Polling y reconnexión
+    - [HUAWEI-OCPP-CHARGER.md](_skills/HUAWEI-OCPP-CHARGER.md) → Protocolo OCPP y modos
+    - [HUAWEI-DOCKER-DEPLOYMENT.md](_skills/HUAWEI-DOCKER-DEPLOYMENT.md) → Containerización
+    - [HUAWEI-DEBUGGING-CHECKLIST.md](_skills/HUAWEI-DEBUGGING-CHECKLIST.md) → Troubleshooting sistemático
 
 ## Lecciones Aprendidas (Log de Errores)
 1.  **Guerra de Archivos**: No usar un único archivo compartido para todos los servicios. Si todos escriben en el mismo sitio, se sobrescriben unos a otros con datos obsoletos.
@@ -55,3 +66,22 @@ No utilizamos Redis ni colas de mensajes. La comunicación se realiza a través 
 -   **OpenAPI / Internals API**: Sustituir el sistema de archivos compartidos por una API REST interna o gRPC para comandos (ej: Dashboard -> Charger).
 -   **Message Broker (MQTT/Redis)**: Usar un bus de datos para la telemetría en tiempo real (Inverter -> Dashboard) en lugar de polling de archivos cada 1s.
 -   **Estado Centralizado**: Considerar Redis para el estado vivo si la complejidad de los archivos `live-state-*.json` aumenta.
+
+## Skills para Agentes IA (NEW)
+
+Para facilitar futuras sesiones de desarrollo y debugging, se han creado skills especializados en `_skills/`:
+
+| Skill | Propósito |
+|-------|-----------|
+| [HUAWEI-IPC-STATE-MANAGEMENT.md](_skills/HUAWEI-IPC-STATE-MANAGEMENT.md) | Entender cómo funciona la comunicación entre servicios via archivos JSON, reglas de propiedad de campos, patrones seguros. |
+| [HUAWEI-MODBUS-COLLECTOR.md](_skills/HUAWEI-MODBUS-COLLECTOR.md) | Todo sobre el polling Modbus, el nuevo sistema de reconexión con exponential backoff, watchdog, manejo de timeouts. |
+| [HUAWEI-OCPP-CHARGER.md](_skills/HUAWEI-OCPP-CHARGER.md) | Protocolo OCPP 1.6, modos inteligentes (FAST/GREEN/HYBRID), SetChargingProfile, integración con datos del inversor. |
+| [HUAWEI-DOCKER-DEPLOYMENT.md](_skills/HUAWEI-DOCKER-DEPLOYMENT.md) | Despliegue monolito vs modular, Docker Compose, multi-stage builds, configuración de volúmenes. |
+| [HUAWEI-DEBUGGING-CHECKLIST.md](_skills/HUAWEI-DEBUGGING-CHECKLIST.md) | Guía sistemática para troubleshooting: 7 problemas críticos, flujo de debugging, comandos esenciales. |
+
+**Cómo usar**: Los agentes de IA cargarán automáticamente estos skills cuando trabajen en este repositorio. Pueden usarse como referencia directa en prompts:
+
+```
+"Según HUAWEI-MODBUS-COLLECTOR.md, ¿por qué el collector se queda offline?"
+"Usando la tabla de propiedad de campos en HUAWEI-IPC-STATE-MANAGEMENT.md, ¿cuál servicio debe escribir X campo?"
+```

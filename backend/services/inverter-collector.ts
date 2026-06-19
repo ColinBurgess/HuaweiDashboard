@@ -70,6 +70,12 @@ let modbusPortIndex = 0;
 let modbusConsecutiveConnectionFailures = 0;
 let isConnecting = false;
 let hasAlertedDisconnection = false;
+let reconnectAttempts = 0;
+let lastReconnectAttemptTime = 0;
+const BASE_RECONNECT_DELAY_MS = 5000;  // 5 seconds
+const MAX_RECONNECT_DELAY_MS = 120000; // 2 minutes
+let lastDisconnectTime = 0;
+let hasAlertedPersistentDisconnection = false;
 
 // PV Status Monitoring
 let pvConnectionStatusPrevious = true;
@@ -83,6 +89,7 @@ const PV_STATUS_GRACE_PERIOD_MS = 30000; // 30 seconds to ignore transient state
 // Telemetry
 let firstTelemetrySyncLogged = false;
 let consecutiveModbusTimeouts = 0;
+let lastSuccessfulReadTime = 0;
 
 // ============================================================================
 // UTILITIES
@@ -109,9 +116,23 @@ function connectModbus() {
   if (!socket) return;
   if (isConnecting || socket.connecting || inverterData.connected) return;
 
+  const now = Date.now();
+  const timeSinceLastAttempt = now - lastReconnectAttemptTime;
+  const reconnectDelay = Math.min(
+    BASE_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempts),
+    MAX_RECONNECT_DELAY_MS
+  );
+
+  // Check if enough time has passed since last attempt
+  if (timeSinceLastAttempt < reconnectDelay) {
+    return;
+  }
+
   const port = currentModbusPort();
   isConnecting = true;
-  console.log(`Connecting to Modbus ${MODBUS_HOST}:${port}...`);
+  lastReconnectAttemptTime = now;
+  const delayInfo = reconnectAttempts > 0 ? ` (attempt ${reconnectAttempts + 1}, backoff: ${reconnectDelay}ms)` : '';
+  console.log(`🔄 Attempting Modbus connection to ${MODBUS_HOST}:${port}...${delayInfo}`);
   socket.connect({ host: MODBUS_HOST, port });
 }
 
@@ -124,6 +145,9 @@ function handleModbusConnect() {
   inverterData.connected = true;
   modbusConsecutiveConnectionFailures = 0;
   consecutiveModbusTimeouts = 0;
+  reconnectAttempts = 0;  // Reset exponential backoff
+  lastSuccessfulReadTime = Date.now();
+  hasAlertedPersistentDisconnection = false;
   console.log(`✅ [MODBUS] Connected to ${MODBUS_HOST}:${currentModbusPort()}`);
 
   if (isTelegramEnabled() && hasAlertedDisconnection) {
@@ -152,14 +176,20 @@ function handleModbusError(err: any) {
   if (modbusConsecutiveConnectionFailures >= 3) {
     const nextIndex = (modbusPortIndex + 1) % MODBUS_PORTS.length;
     if (nextIndex !== modbusPortIndex) {
-      console.log(`Rotating Modbus port: ${currentModbusPort()} → ${MODBUS_PORTS[nextIndex]}`);
+      console.log(`⚠️  Rotating Modbus port: ${currentModbusPort()} → ${MODBUS_PORTS[nextIndex]}`);
       modbusPortIndex = nextIndex;
     }
     modbusConsecutiveConnectionFailures = 0;
   }
 
-  // Schedule reconnection
-  setTimeout(connectModbus, 10_000);
+  // Schedule reconnection with exponential backoff
+  reconnectAttempts++;
+  const delay = Math.min(
+    BASE_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempts - 1),
+    MAX_RECONNECT_DELAY_MS
+  );
+  console.warn(`⏳ Scheduling reconnection in ${delay}ms (attempt ${reconnectAttempts})`);
+  setTimeout(connectModbus, delay);
 }
 
 // Setup Modbus socket event handlers (if collector or monolith)
@@ -170,7 +200,16 @@ if (socket) {
     if (socket) {
       isConnecting = false;
       inverterData.connected = false;
+      lastDisconnectTime = Date.now();
       console.warn('⚠️ Modbus socket closed');
+      // Attempt reconnection after socket close
+      reconnectAttempts++;
+      const delay = Math.min(
+        BASE_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempts - 1),
+        MAX_RECONNECT_DELAY_MS
+      );
+      console.warn(`⏳ Scheduling reconnection in ${delay}ms after socket close`);
+      setTimeout(connectModbus, delay);
     }
   });
 }
@@ -293,14 +332,24 @@ async function pollInverter() {
 
     // Daily Yield
     inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
+    
+    // Reset timeout counter on successful read
+    consecutiveModbusTimeouts = 0;
+    lastSuccessfulReadTime = Date.now();
   } catch (err) {
     console.warn('Modbus read failed (Operation Block):', err);
     consecutiveModbusTimeouts++;
     if (consecutiveModbusTimeouts >= 3 && socket) {
-      console.error('🔴 Persistent Modbus timeouts detected. Forcing socket disconnect...');
+      console.error('🔴 Persistent Modbus timeouts detected (3+ consecutive timeouts). Forcing socket disconnect and reconnection...');
       socket.destroy();
       inverterData.connected = false;
+      isConnecting = false;
       consecutiveModbusTimeouts = 0;
+      lastDisconnectTime = Date.now();
+      // Force immediate reconnection attempt
+      reconnectAttempts = 0;  // Reset to allow immediate reconnect
+      lastReconnectAttemptTime = 0;
+      setTimeout(connectModbus, 500);
     }
   }
 
@@ -483,12 +532,36 @@ export async function startInverterService() {
   connectModbus();
   setInterval(pollInverter, MODBUS_POLLING_INTERVAL);
 
+  // Watchdog: Monitor connection health and force reconnection if offline too long
+  const OFFLINE_THRESHOLD_MS = 60000;  // 60 seconds offline triggers watchdog
+  const PERSISTENT_FAILURE_THRESHOLD_MS = 300000;  // 5 minutes of failures = critical alert
+  setInterval(() => {
+    if (!inverterData.connected) {
+      const timeSinceLastDisconnect = Date.now() - lastDisconnectTime;
+      const timeSinceLastSuccessfulRead = Date.now() - lastSuccessfulReadTime;
+
+      // Alert if persistently disconnected for too long
+      if (timeSinceLastSuccessfulRead > PERSISTENT_FAILURE_THRESHOLD_MS && !hasAlertedPersistentDisconnection) {
+        console.error('🚨 CRITICAL: Modbus has been offline for 5+ minutes. Check inverter/network/firewall.');
+        hasAlertedPersistentDisconnection = true;
+      }
+
+      // Force reconnection if offline for more than threshold
+      if (timeSinceLastDisconnect > OFFLINE_THRESHOLD_MS) {
+        console.warn(`⚠️  Watchdog: Offline for ${Math.round(timeSinceLastDisconnect / 1000)}s. Forcing reconnection attempt...`);
+        reconnectAttempts = 0;  // Reset backoff
+        lastReconnectAttemptTime = 0;
+        connectModbus();
+      }
+    }
+  }, 30000);  // Check every 30 seconds
+
   // Send health heartbeat
   setInterval(() => {
     const role = process.env.SERVICE_ROLE || 'monolith';
 
     const status = inverterData.connected ? 'OK' : 'Error (Disconnected)';
-    const details = inverterData.connected ? `Polling at ${currentModbusPort()}` : 'Modbus connection failed';
+    const details = inverterData.connected ? `Polling at ${currentModbusPort()}` : `Offline (${reconnectAttempts} reconnect attempts)`;
 
     inverterData.services[role] = {
       lastHeartbeat: new Date().toISOString(),
