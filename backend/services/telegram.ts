@@ -12,7 +12,7 @@ const alertThrottle = new Map<string, number>();
 const THROTTLE_DURATION_MS = 5 * 60 * 1000; // 5 minutes between same alert type
 
 export interface TelegramAlert {
-  type: 'inverter_disconnected' | 'inverter_reconnected' | 'modbus_error' | 'system_info';
+  type: 'inverter_disconnected' | 'inverter_reconnected' | 'modbus_error' | 'system_info' | 'pv_disconnected' | 'pv_reconnected' | 'pv_string_loss';
   title: string;
   message: string;
   severity?: 'critical' | 'warning' | 'info'; // For emoji selection
