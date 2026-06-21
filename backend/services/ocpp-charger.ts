@@ -972,7 +972,12 @@ function handleOcppCall(
   frame: OcppCall,
 ) {
   const [, uniqueId, action, payload] = frame;
-  console.log(`[${chargePointId}] OCPP Call: ${action}`);
+  
+  // Only log important events, not routine heartbeats
+  const importantActions = ['BootNotification', 'StatusNotification', 'Authorize', 'StartTransaction', 'StopTransaction', 'MeterValues'];
+  if (importantActions.includes(action)) {
+    console.log(`[${chargePointId}] OCPP Call: ${action}`);
+  }
 
   switch (action) {
     case 'BootNotification':
