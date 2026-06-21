@@ -408,7 +408,7 @@ async function pollInverter() {
   const totalLoad = inverterData.activePower - inverterData.gridPower + inverterData.batteryPower;
   const evLoad = Math.max(0, chargerState.powerW ?? 0);
   inverterData.houseLoad = Math.max(0, totalLoad - evLoad);
-  inverterData.consumption = inverterData.houseLoad;
+  inverterData.consumption = inverterData.houseLoad + evLoad;
 
   // Update timestamp and emit data
   inverterData.lastUpdate = new Date().toISOString();

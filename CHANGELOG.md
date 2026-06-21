@@ -17,11 +17,18 @@ Each release section includes:
 
 ---
 
+## [0.1.2] - Unreleased
+
+### Fixed
+- **CRITICAL**: Fixed consumption calculation to include EV charger power. Previously the chart only showed house load, excluding car charging consumption. Now `consumption = houseLoad + evLoad` correctly accounts for both.
+
+---
+
 ## [Unreleased]
 
 ### Planned for v0.3.0
 - **Configuration Menu**: Settings button/icon in dashboard header
-- **Electricity Pricing Parameters**: 
+- **Electricity Pricing Parameters**:
   - Grid import price (€/kWh)
   - Surplus export compensation (€/kWh)
   - Currency selector
