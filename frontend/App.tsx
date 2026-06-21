@@ -230,6 +230,7 @@ export default function App() {
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [statsPeriod, setStatsPeriod] = useState<'day' | 'month' | 'year'>('day');
   const [statsDate, setStatsDate] = useState<Date>(new Date());
+  const [versions, setVersions] = useState<{app: string, services: Record<string, string>} | null>(null);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -368,6 +369,25 @@ export default function App() {
       if (retryTimer) {
         window.clearTimeout(retryTimer);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadVersions = async () => {
+      try {
+        const versionInfo = await fetchJson<{app: string, services: Record<string, string>}>('/api/version', controller.signal);
+        setVersions(versionInfo);
+      } catch {
+        // Silently fail, versions are optional for UI
+      }
+    };
+
+    loadVersions();
+
+    return () => {
+      controller.abort();
     };
   }, []);
 
@@ -623,6 +643,11 @@ export default function App() {
             <div className="flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-wider text-gray-500">Last Update</span>
               <span className="text-sm font-mono">{data ? new Date(data.lastUpdate).toLocaleTimeString() : '--:--:--'}</span>
+            </div>
+            <div className="h-8 w-px bg-white/10" />
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] uppercase tracking-wider text-gray-500">Version</span>
+              <span className="text-sm font-mono text-gray-400">{versions?.app || 'v?.?.?'}</span>
             </div>
           </div>
         </div>
@@ -1386,6 +1411,13 @@ export default function App() {
                   {service?.details && (
                     <div className="mt-1 pt-2 border-t border-white/5 text-[9px] text-gray-500 italic truncate">
                       {service.details}
+                    </div>
+                  )}
+
+                  {versions?.services?.[role] && (
+                    <div className="mt-1 pt-2 border-t border-white/5 text-[9px] text-gray-500 uppercase tracking-tighter flex items-center justify-between">
+                      <span>Version</span>
+                      <span className="font-mono text-gray-400">{versions.services[role]}</span>
                     </div>
                   )}
                 </div>

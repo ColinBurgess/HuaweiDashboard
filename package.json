@@ -1,7 +1,8 @@
 {
-  "name": "react-example",
+  "name": "huawei-dashboard",
+  "description": "Modular home energy dashboard with Huawei inverter + car charger integration",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "tsx backend/server.ts",
@@ -13,7 +14,11 @@
     "service:inverter": "NODE_ENV=production SERVICE_ROLE=collector tsx backend/server.ts",
     "service:charger": "NODE_ENV=production SERVICE_ROLE=charger tsx backend/server.ts",
     "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/server.ts",
-    "migrate:history": "tsx backend/scripts/migrate_history.ts"
+    "migrate:history": "tsx backend/scripts/migrate_history.ts",
+    "version:show": "node -e \"console.log('HuaweiDashboard v' + require('./package.json').version)\"",
+    "version:patch": "npm version patch --no-git-tag-version && npm run version:show",
+    "version:minor": "npm version minor --no-git-tag-version && npm run version:show",
+    "version:major": "npm version major --no-git-tag-version && npm run version:show"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

@@ -25,6 +25,9 @@ import {
   queryInfluxStats,
 } from '../utils/stats.js';
 import {
+  getVersionInfo,
+} from '../config/versions.js';
+import {
   chargerState,
   inverterData,
   ChargingMode,
@@ -271,6 +274,18 @@ if (app) {
         res.status(500).json({ error: 'Corrupt log file' });
       }
     });
+  });
+
+  // ============================================================================
+  // EXPRESS ROUTES - VERSION & BUILD INFO
+  // ============================================================================
+
+  /**
+   * GET /api/version
+   * Get application and service versions
+   */
+  app.get('/api/version', (req, res) => {
+    res.json(getVersionInfo());
   });
 
   // ============================================================================
