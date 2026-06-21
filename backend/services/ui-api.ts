@@ -117,7 +117,14 @@ function readAndEmitLogs() {
 
     for (const line of newLines) {
       try {
-        const entry = JSON.parse(line) as RuntimeLogEntry;
+        const parsed = JSON.parse(line) as any;
+        // Migrate old logs with 'timestamp' field to 'time' field
+        const entry: RuntimeLogEntry = {
+          time: parsed.time ?? parsed.timestamp ?? new Date().toISOString(),
+          level: parsed.level ?? 'info',
+          source: parsed.source ?? 'unknown',
+          message: parsed.message ?? '',
+        };
         storeLiveLog(entry);
       } catch (e) {
         // Skip malformed lines
