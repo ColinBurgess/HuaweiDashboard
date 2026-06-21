@@ -1060,11 +1060,9 @@ function handleOcppCall(
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
-      // DEBUG: Log detailed MeterValues parsing
+      // DEBUG: Only log if power parsing fails (normal operation is silent)
       if (!Number.isFinite(power)) {
         console.warn(`[${chargePointId}] MeterValues received but power parsing failed. Payload: ${JSON.stringify(payload).substring(0, 200)}`);
-      } else {
-        console.log(`[${chargePointId}] MeterValues (power=${chargerState.powerW}W, txId=${chargerState.transactionId})`);
       }
       return;
     }
