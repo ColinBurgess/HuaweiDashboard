@@ -20,7 +20,7 @@ const originalConsole = {
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
 export interface LogEntry {
-  timestamp: string;
+  time: string;
   level: LogLevel;
   source: string;
   message: string;
@@ -73,7 +73,7 @@ export function log(message: string, level: LogLevel = 'info') {
   const source = getSourceName();
 
   const entry: LogEntry = {
-    timestamp,
+    time: timestamp,
     level,
     source,
     message,
