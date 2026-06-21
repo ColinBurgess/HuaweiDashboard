@@ -170,7 +170,7 @@ function generateTransactionId(): number {
  * Sanitize OCPP payloads for safe logging
  * Handles invalid/malformed timestamps that may come from charger after power loss
  * (Huawei SCharger loses RTC, reports timestamp with timezone misalignment)
- * 
+ *
  * After power loss, charger reports SecurityEventNotification with incorrectly formatted
  * timestamp (e.g. "17:11:31.000Z" for local time in UTC+2). This causes "Invalid Date"
  * when serialized. This function replaces invalid timestamps with server's current time.
@@ -972,7 +972,7 @@ function handleOcppCall(
   frame: OcppCall,
 ) {
   const [, uniqueId, action, payload] = frame;
-  
+
   // Only log important events, not routine heartbeats
   const importantActions = ['BootNotification', 'StatusNotification', 'Authorize', 'StartTransaction', 'StopTransaction', 'MeterValues'];
   if (importantActions.includes(action)) {
@@ -1060,7 +1060,12 @@ function handleOcppCall(
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
-      console.log(`[${chargePointId}] MeterValues (power=${chargerState.powerW}W, txId=${chargerState.transactionId})`);
+      // DEBUG: Log detailed MeterValues parsing
+      if (!Number.isFinite(power)) {
+        console.warn(`[${chargePointId}] MeterValues received but power parsing failed. Payload: ${JSON.stringify(payload).substring(0, 200)}`);
+      } else {
+        console.log(`[${chargePointId}] MeterValues (power=${chargerState.powerW}W, txId=${chargerState.transactionId})`);
+      }
       return;
     }
 
