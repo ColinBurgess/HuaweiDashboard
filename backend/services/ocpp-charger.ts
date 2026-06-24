@@ -752,6 +752,7 @@ function applyHybridChargingPolicy(): void {
   if (chargerState.status !== 'Charging') {
     // If we need to start charging, embed the profile directly in RemoteStartTransaction.
     // This avoids back-to-back OCPP messages that would cause buffer overflow in the charger.
+    console.log(`[HYBRID-FLOW] Starting transaction with profile embedded (targetAmps=${shouldUpdateLimit ? boundedTargetAmps : 'none'})`);
     sendRemoteStartTransaction(shouldUpdateLimit ? boundedTargetAmps : undefined);
     if (shouldUpdateLimit) {
       chargerState.lastRequestedCurrentLimitA = boundedTargetAmps;
@@ -1053,6 +1054,7 @@ function handleOcppCall(
     }
     case 'MeterValues': {
       const power = parseMeterPower(payload);
+      const oldPowerW = chargerState.powerW;
       if (Number.isFinite(power)) {
         chargerState.powerW = Math.max(0, Number(power));
       }
@@ -1073,7 +1075,10 @@ function handleOcppCall(
       chargerState.lastUpdate = new Date().toISOString();
       ws.send(JSON.stringify(buildCallResult(uniqueId, {})));
       emitCombinedData();
-      // DEBUG: Only log if power parsing fails (normal operation is silent)
+      // Always log in HYBRID mode to debug power flow issues
+      if (chargerState.chargingMode === 'HYBRID' || !Number.isFinite(power)) {
+        console.log(`[${chargePointId}] [HYBRID-METER] MeterValues: powerW=${chargerState.powerW}W (was ${oldPowerW}W), status=${chargerState.status}, txId=${chargerState.transactionId}`);
+      }
       if (!Number.isFinite(power)) {
         console.warn(`[${chargePointId}] MeterValues received but power parsing failed. Payload: ${JSON.stringify(payload).substring(0, 200)}`);
       }
@@ -1094,6 +1099,9 @@ function handleOcppCall(
       })));
       emitCombinedData();
       console.log(`[${chargePointId}] StartTransaction accepted, assigned txId=${chargerState.transactionId}`, sanitizePayloadForLogging(payload));
+      if (chargerState.chargingMode === 'HYBRID') {
+        console.log(`[${chargePointId}] [HYBRID-START] Transaction started. Awaiting MeterValues with powerW > 0...`);
+      }
       return;
 
     case 'StopTransaction': {
