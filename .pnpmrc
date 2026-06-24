@@ -5,3 +5,6 @@ strict-peer-dependencies=false
 
 # Security policies
 auto-install-peers=true
+
+# Build-only dependencies (do not hoist to node_modules)
+only-built-dependencies=@google/genai,esbuild,protobufjs
