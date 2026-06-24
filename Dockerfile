@@ -9,7 +9,7 @@ WORKDIR /app
 # Corepack reads packageManager field from package.json for version
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
@@ -28,7 +28,7 @@ WORKDIR /app
 RUN corepack enable
 
 # Copiar manifiestos de dependencias
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml ./
 
 # Copiar dependencias y directorios compilados
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
