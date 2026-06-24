@@ -20,6 +20,12 @@ Each release section includes:
 ## [0.1.2] - Unreleased
 
 ### Fixed
+- **CRITICAL**: Eliminated false Telegram alerts about inverter disconnection during Standby mode. Now reads device status register (32089) to differentiate between:
+  - **Standby states (0-3)**: Normal sleep mode when no solar irradiance (night, cloudy). Modbus timeouts expected. Alerts suppressed.
+  - **Running states (512-515)**: Normal operation. Modbus timeouts now properly trigger disconnection alerts.
+  - **Shutdown states (768-771)**: Faults or alarms. Alerts enabled.
+  - SmartDongle behavior clarified: Loses TCP connectivity when inverter CPU powered down (no battery), which is expected with SUN2000 + SmartDongle configuration.
+- **ENHANCEMENT**: Added secondary device-status.jsonl log file (separate from main logs) to track inverter state transitions without polluting main logs. Useful for diagnosing state changes and troubleshooting.
 - **CRITICAL**: Fixed consumption calculation to include EV charger power. Previously the chart only showed house load, excluding car charging consumption. Now `consumption = houseLoad + evLoad` correctly accounts for both.
 
 ---

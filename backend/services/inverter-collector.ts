@@ -86,6 +86,12 @@ let pvStatusRegistersAvailable = false;
 const SERVICE_START_TIME = Date.now();
 const PV_STATUS_GRACE_PERIOD_MS = 30000; // 30 seconds to ignore transient state changes on startup
 
+// Device Status Monitoring (Register 32089)
+// Used to differentiate between Standby (expected offline) vs actual disconnection
+let lastInverterStatus = -1; // -1 = unknown, 0-3 = Standby, 256-771 = other states
+let lastStatusChangeTime = 0;
+const STANDBY_STATES = [0, 1, 2, 3]; // All Standby variants
+
 // Telemetry
 let firstTelemetrySyncLogged = false;
 let consecutiveModbusTimeouts = 0;
@@ -96,6 +102,50 @@ let lastSuccessfulReadTime = 0;
 // ============================================================================
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Map device status code to human-readable name (from Huawei SUN2000 specs)
+ */
+function getStatusName(status: number): string {
+  const statuses: Record<number, string> = {
+    0: 'Standby: initializing',
+    1: 'Standby: insulation detecting',
+    2: 'Standby: irradiation detecting',
+    3: 'Standby: grid detecting',
+    256: 'Starting',
+    512: 'On-grid / Running',
+    513: 'Grid: power limited',
+    514: 'Grid: self-derating',
+    515: 'Off-grid running',
+    768: 'Shutdown: fault',
+    769: 'Shutdown: command',
+    770: 'Shutdown: OVGR',
+    771: 'Shutdown: communication'
+  };
+  return statuses[status] ?? `Unknown (${status})`;
+}
+
+/**
+ * Log device status changes to a dedicated file (separate from main logs)
+ * Useful for diagnosing inverter state transitions and troubleshooting
+ */
+function logStatusChange(status: number, reason: string = ''): void {
+  const timestamp = new Date().toISOString();
+  const statusName = getStatusName(status);
+  const logEntry = JSON.stringify({
+    time: timestamp,
+    status,
+    statusName,
+    reason,
+  }) + '\n';
+
+  const statusLogFile = path.join(HISTORY_DIR, 'device-status.jsonl');
+  fs.appendFile(statusLogFile, logEntry, (err) => {
+    if (err) console.error('Error saving to device-status log:', err);
+  });
+
+  console.log(`[STATUS] ${timestamp} | Status ${status}: ${statusName}${reason ? ' (' + reason + ')' : ''}`);
+}
 
 /**
  * Get the current Modbus port in rotation
@@ -167,9 +217,18 @@ function handleModbusError(err: any) {
   modbusConsecutiveConnectionFailures++;
   console.error(`[MODBUS ERROR] Connection failed (attempt #${modbusConsecutiveConnectionFailures}):`, err.message ?? err);
 
-  if (isTelegramEnabled() && !hasAlertedDisconnection) {
+  // IMPORTANT: Only alert if NOT in Standby mode
+  // If inverter is in Standby (states 0-3), timeouts are expected and normal
+  // Alert only if: (1) Running/Operating state, or (2) Shutdown/Error state
+  const isStandbyState = STANDBY_STATES.includes(lastInverterStatus);
+  const shouldAlert = !isStandbyState && isTelegramEnabled() && !hasAlertedDisconnection;
+
+  if (shouldAlert) {
+    console.warn('⚠️  ALERT TRIGGERED: Disconnection during expected operating state');
     alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
     hasAlertedDisconnection = true;
+  } else if (isStandbyState) {
+    console.log('⭕ Timeout ignored: Inverter in Standby mode (state ' + lastInverterStatus + ', expected)');
   }
 
   // Rotate ports on failure
@@ -330,9 +389,18 @@ async function pollInverter() {
     inverterData.temperature = regs1[32087 - 32016] / 10;
     inverterData.status = regs1[32089 - 32016];
 
+    // Track device status changes (register 32089 = device status)
+    const currentStatus = inverterData.status;
+    if (currentStatus !== lastInverterStatus) {
+      const reason = lastInverterStatus === -1 ? 'initial read' : `changed from ${lastInverterStatus} to ${currentStatus}`;
+      logStatusChange(currentStatus, reason);
+      lastInverterStatus = currentStatus;
+      lastStatusChangeTime = Date.now();
+    }
+
     // Daily Yield
     inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
-    
+
     // Reset timeout counter on successful read
     consecutiveModbusTimeouts = 0;
     lastSuccessfulReadTime = Date.now();
@@ -446,6 +514,7 @@ async function pollInverter() {
     console.log(`   Inverter Active:    ${inverterData.activePower} W`);
     console.log(`   Grid Net Power:     ${inverterData.gridPower} W (Contador)`);
     console.log(`   House Load:         ${inverterData.houseLoad} W`);
+    console.log(`   Device Status:      ${inverterData.status} (${getStatusName(inverterData.status)})`);
     console.log(`   PV Conn. State:     ${inverterData.pvConnectionStatus ? 'Connected (1)' : 'Disconnected (0)'}`);
     console.log(`   PV String Alarm:    ${inverterData.pvStringLossAlarm ? 'Active (1)' : 'Inactive (0)'}\n`);
   }
