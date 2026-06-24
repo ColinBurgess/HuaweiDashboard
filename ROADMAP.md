@@ -44,7 +44,7 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 - **Workflow File**: `.github/workflows/build-and-push.yml`
 - **Triggers**: Push to main/master, git tags (v*), pull requests
 - **Permissions**: `contents: read`, `packages: write`
-- **Supported Platforms**: 
+- **Supported Platforms**:
   - `linux/amd64` - Intel/AMD servers and desktops
   - `linux/arm64` - Raspberry Pi 4/5, ARM servers
 
