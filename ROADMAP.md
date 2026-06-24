@@ -8,56 +8,62 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## Current Status
 
-**v0.1.0** (2026-06-19)
+**v0.1.2** (2026-06-24)
 - ✅ Modular architecture (3 independent services)
 - ✅ Modbus collector with exponential backoff recovery
 - ✅ OCPP 1.6 charger with smart modes (FAST/GREEN/HYBRID)
 - ✅ Real-time dashboard with health monitoring
+- ✅ **DevOps Phase 1**: CI/CD pipeline with multi-arch Docker builds and GHCR publication
 - ⚠️ **Charger communication broken** (root cause TBD)
 
 ---
 
 ## 📌 Roadmap by Version
 
-### [DevOps Phase 1] - Automated Multi-Arch Docker Build & Publication (In Progress)
+### [DevOps Phase 1] - Automated Multi-Arch Docker Build & Publication (✅ COMPLETE)
 
 **Goal**: Establish a professional CI/CD pipeline with automated code validation, multi-architecture Docker builds, and secure publication to GitHub Container Registry (GHCR).
 
-#### 🔄 CI/CD Pipeline Setup
+**Completed**: 2026-06-24 — See [CHANGELOG v0.1.2](CHANGELOG.md#012---2026-06-24) for full details.
+
+#### 🔄 CI/CD Pipeline Setup (✅ All Complete)
 - [x] **Add**: GitHub Actions workflow for code validation
-  - Lint TypeScript/JavaScript (ESLint)
-  - Type checking (if configured)
-  - Dockerfile validation (Hadolint)
-  - Cached dependency installation (pnpm)
+  - Lint TypeScript/JavaScript (ESLint) ✅
+  - Type checking (TypeScript) ✅
+  - Dockerfile validation (Hadolint) ✅
+  - Cached dependency installation (pnpm) ✅
 - [x] **Add**: Multi-architecture Docker build system
-  - Setup QEMU for cross-compilation
-  - Configure Docker Buildx
-  - Build for `linux/amd64` (x86_64) and `linux/arm64` (Raspberry Pi, ARM servers)
-  - GitHub Actions layer caching (type=gha) for efficiency
+  - Setup QEMU for cross-compilation ✅
+  - Configure Docker Buildx ✅
+  - Build for `linux/amd64` (x86_64) and `linux/arm64` (Raspberry Pi, ARM servers) ✅
+  - GitHub Actions layer caching (type=gha) for efficiency ✅
 - [x] **Add**: Secure image publication to GHCR
-  - Automatic authentication with `GITHUB_TOKEN`
-  - Semantic versioning: `latest` tag for main/master, `vX.Y.Z` for git tags
-  - Image digest and metadata tracking
-  - Automatic image tagging by branch/tag/commit SHA
+  - Automatic authentication with `GITHUB_TOKEN` ✅
+  - Semantic versioning: `latest` tag for main/master, `vX.Y.Z` for git tags ✅
+  - Image digest and metadata tracking ✅
+  - Automatic image tagging by branch/tag/commit SHA ✅
+- [x] **Add**: docker-compose with GHCR images and Watchtower auto-update ✅
+- [x] **Add**: pnpm configuration best practices (.pnpmrc, proper versioning) ✅
 
-#### 📋 Implementation Details
-- **Workflow File**: `.github/workflows/build-and-push.yml`
-- **Triggers**: Push to main/master, git tags (v*), pull requests
-- **Permissions**: `contents: read`, `packages: write`
-- **Supported Platforms**:
-  - `linux/amd64` - Intel/AMD servers and desktops
-  - `linux/arm64` - Raspberry Pi 4/5, ARM servers
+#### 📋 Implementation Details (✅ Completed)
+- **Workflow File**: `.github/workflows/build-and-push.yml` ✅
+- **Triggers**: Push to main/master, git tags (v*), pull requests ✅
+- **Permissions**: `contents: read`, `packages: write` ✅
+- **Supported Platforms**: `linux/amd64` and `linux/arm64` ✅
+- **Watchtower Integration**: Auto-pulls latest images from GHCR every 10 minutes ✅
+- **docker-compose.yml**: Updated to reference GHCR images instead of local builds ✅
 
-#### 🎯 Benefits
-- Automated validation prevents broken code from being deployed
-- Multi-architecture support enables Raspberry Pi deployments (future)
-- Cached builds reduce CI/CD execution time
-- Semantic versioning enables easy rollback/testing of specific releases
-- GHCR provides private container registry without external dependencies
+#### 🎯 Benefits (Realized)
+- ✅ Automated validation prevents broken code from being deployed
+- ✅ Multi-architecture support enables Raspberry Pi deployments
+- ✅ Cached builds reduce CI/CD execution time
+- ✅ Semantic versioning enables easy rollback/testing of specific releases
+- ✅ GHCR provides container registry without external dependencies
+- ✅ GitOps workflow: push code → build → publish → auto-deploy
 
-#### ⏱️ Timeline
-- ✅ Complete: Workflow configuration and testing
-- ⏳ Next: Integrate with deployment automation (Phase 2)
+#### ⏱️ Timeline (Completed)
+- ✅ Complete: Workflow configuration and testing (2026-06-24)
+- 🚀 Ready for: Deployment automation (Phase 2)
 
 ---
 
