@@ -30,51 +30,53 @@ jobs:
         uses: actions/checkout@v4
 
       # ========================================================================
-      # Configurar Node.js 22
+      # 1. Configurar pnpm oficialmente (Recomendado antes de Setup Node)
+      # ========================================================================
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # ========================================================================
+      # 2. Configurar Node.js y activar la caché de pnpm automáticamente
       # ========================================================================
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
 
       # ========================================================================
-      # Configurar pnpm
-      # ========================================================================
-      - name: Install pnpm
-        run: npm install -g pnpm@9
-
-      # ========================================================================
-      # Instalar dependencias
+      # 3. Instalar dependencias
       # ========================================================================
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       # ========================================================================
-      # Ejecutar linting
+      # 4. Ejecutar linting
       # ========================================================================
       - name: Run ESLint
         run: pnpm run lint
         continue-on-error: true
 
       # ========================================================================
-      # Ejecutar type checking (si está configurado)
+      # 5. Ejecutar type checking (si está configurado)
       # ========================================================================
       - name: Run TypeScript type checking
         run: pnpm run type-check
         continue-on-error: true
 
       # ========================================================================
-      # Validar Dockerfile con Hadolint
+      # 6. Validar Dockerfile con Hadolint
       # ========================================================================
       - name: Run Hadolint (Dockerfile linter)
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
           ignore: DL3008
-          # DL3008: Ignorar apt-get pin en imagen slim (no es crítico, imagen oficial de Node.js)
 
       # ========================================================================
-      # Compilación local (opcional: verificar que compila antes de dockerizar)
+      # 7. Compilación local
       # ========================================================================
       - name: Build frontend and backend
         run: pnpm run build
