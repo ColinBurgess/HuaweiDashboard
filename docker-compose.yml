@@ -3,8 +3,7 @@ services:
   # MODO MONOLITO: Un solo contenedor con todos los servicios
   # =========================================================
   monolith:
-    build: .
-    image: huaweidashboard:latest
+    image: ghcr.io/colinburgess/huaweidashboard:latest
     container_name: huawei-monolith
     restart: unless-stopped
     env_file: .env
@@ -24,8 +23,7 @@ services:
   # =========================================================
 
   ui-dashboard:
-    build: .
-    image: huaweidashboard:latest
+    image: ghcr.io/colinburgess/huaweidashboard:latest
     container_name: huawei-dashboard-service
     restart: unless-stopped
     env_file: .env
@@ -40,8 +38,7 @@ services:
     command: ["pnpm", "run", "service:dashboard"]
 
   inverter-collector:
-    build: .
-    image: huaweidashboard:latest
+    image: ghcr.io/colinburgess/huaweidashboard:latest
     container_name: huawei-collector-service
     restart: unless-stopped
     env_file: .env
@@ -57,8 +54,7 @@ services:
     command: ["pnpm", "run", "service:inverter"]
 
   charger-service:
-    build: .
-    image: huaweidashboard:latest
+    image: ghcr.io/colinburgess/huaweidashboard:latest
     container_name: huawei-charger-service
     restart: unless-stopped
     env_file: .env
@@ -103,6 +99,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # =========================================================
+  # Watchtower: Automatic image updates (GitOps)
+  # =========================================================
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: huawei-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Check registry every 10 minutes (600s) and cleanup old images to save disk space
+    command: --interval 600 --cleanup
+    profiles:
+      - modular
+      - monolith
 
 volumes:
   influxdb_data:
