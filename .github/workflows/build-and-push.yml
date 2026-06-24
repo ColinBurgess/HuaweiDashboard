@@ -86,9 +86,10 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
-          ignore: DL3008,DL3009
-          # DL3008: Ignorar apt-get pin (no es crítico aquí)
-          # DL3009: Ignorar verificación de checksum (usamos imagen oficial)
+          ignore: DL3008
+          # DL3008: Ignorar apt-get pin en imagen slim (no es crítico, imagen oficial de Node.js)
+          # DL3009: Se removió - ahora pinneamos pnpm@9 explícitamente
+          # DL3016: Se removió - ahora pinneamos versiones en npm install
 
       # ========================================================================
       # Compilación local (opcional: verificar que compila antes de dockerizar)

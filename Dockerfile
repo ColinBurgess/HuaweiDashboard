@@ -5,8 +5,8 @@ FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm (pinned version for reproducibility)
+RUN npm install -g pnpm@9
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -22,8 +22,8 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Install pnpm in final image
-RUN npm install -g pnpm
+# Install pnpm in final image (pinned version for reproducibility)
+RUN npm install -g pnpm@9
 
 # Copiar manifiestos de dependencias
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
