@@ -17,7 +17,39 @@ Each release section includes:
 
 ---
 
-## [0.1.2] - Unreleased
+## [0.1.2] - 2026-06-24
+
+### Added
+- **CI/CD Pipeline**: GitHub Actions workflow for multi-architecture Docker builds (linux/amd64, linux/arm64)
+- **GHCR Publication**: Automated image push to GitHub Container Registry with semantic versioning:
+  - `latest` tag for main/master branch
+  - `vX.Y.Z` tags for git release tags
+  - SHA commit hash for traceability
+- **Watchtower Integration**: GitOps-style automatic image updates. Checks registry every 10 minutes and pulls latest images
+- **pnpm Configuration**: Moved to `.pnpmrc` with `only-built-dependencies` setting for proper build dependency handling
+- **Build Validation**: Added ESLint, TypeScript type-check, and Hadolint checks to validation job
+
+### Changed
+- **Dockerfile**: Replaced npm-based pnpm installation with corepack (native Node.js 16+ tool)
+- **docker-compose.yml**: Switched from local `build: .` to GHCR image references (`ghcr.io/colinburgess/huaweidashboard:latest`)
+- **pnpm Setup**: Official `pnpm/action-setup@v4` action with auto-detection of version from `packageManager` field
+- **Project Structure**: Removed `pnpm-workspace.yaml` (project is not a true monorepo; single package.json at root)
+
+### Fixed
+- **GitHub Actions**: pnpm cache now properly configured via `setup-node@v4` `cache: 'pnpm'` parameter
+- **Deprecated Configuration**: Moved `pnpm.onlyBuiltDependencies` from package.json to `.pnpmrc` (package.json field is no longer read by pnpm v9+)
+- **Dockerfile References**: Removed non-existent `pnpm-workspace.yaml` from COPY commands in builder and final stages
+
+### DevOps Benefits
+- **No Local Docker Rebuild**: Production environments pull images directly from GHCR
+- **Automatic Updates**: Watchtower keeps containers synchronized with latest published image
+- **Multi-Architecture Support**: Same image works on x86_64 and ARM64 architectures
+- **Reproducibility**: Exact pnpm version (9.12.0) enforced across CI/CD and local development
+- **Disk Efficiency**: Watchtower cleanup flag removes old images to save storage space
+
+---
+
+## [0.1.1] - 2026-06-19 (Previous)
 
 ### Fixed
 - **CRITICAL**: Eliminated false Telegram alerts about inverter disconnection during Standby mode. Now reads device status register (32089) to differentiate between:
