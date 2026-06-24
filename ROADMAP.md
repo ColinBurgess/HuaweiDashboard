@@ -19,6 +19,48 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## 📌 Roadmap by Version
 
+### [DevOps Phase 1] - Automated Multi-Arch Docker Build & Publication (In Progress)
+
+**Goal**: Establish a professional CI/CD pipeline with automated code validation, multi-architecture Docker builds, and secure publication to GitHub Container Registry (GHCR).
+
+#### 🔄 CI/CD Pipeline Setup
+- [x] **Add**: GitHub Actions workflow for code validation
+  - Lint TypeScript/JavaScript (ESLint)
+  - Type checking (if configured)
+  - Dockerfile validation (Hadolint)
+  - Cached dependency installation (pnpm)
+- [x] **Add**: Multi-architecture Docker build system
+  - Setup QEMU for cross-compilation
+  - Configure Docker Buildx
+  - Build for `linux/amd64` (x86_64) and `linux/arm64` (Raspberry Pi, ARM servers)
+  - GitHub Actions layer caching (type=gha) for efficiency
+- [x] **Add**: Secure image publication to GHCR
+  - Automatic authentication with `GITHUB_TOKEN`
+  - Semantic versioning: `latest` tag for main/master, `vX.Y.Z` for git tags
+  - Image digest and metadata tracking
+  - Automatic image tagging by branch/tag/commit SHA
+
+#### 📋 Implementation Details
+- **Workflow File**: `.github/workflows/build-and-push.yml`
+- **Triggers**: Push to main/master, git tags (v*), pull requests
+- **Permissions**: `contents: read`, `packages: write`
+- **Supported Platforms**: 
+  - `linux/amd64` - Intel/AMD servers and desktops
+  - `linux/arm64` - Raspberry Pi 4/5, ARM servers
+
+#### 🎯 Benefits
+- Automated validation prevents broken code from being deployed
+- Multi-architecture support enables Raspberry Pi deployments (future)
+- Cached builds reduce CI/CD execution time
+- Semantic versioning enables easy rollback/testing of specific releases
+- GHCR provides private container registry without external dependencies
+
+#### ⏱️ Timeline
+- ✅ Complete: Workflow configuration and testing
+- ⏳ Next: Integrate with deployment automation (Phase 2)
+
+---
+
 ### [v0.2.0] - Stability & Debugging (Q3 2026)
 
 **Goal**: Fix charger communication issue and establish stable baseline.
