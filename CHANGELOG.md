@@ -17,6 +17,27 @@ Each release section includes:
 
 ---
 
+## [Unreleased]
+
+### Planned
+- Message broker integration (MQTT/Redis) for real-time telemetry
+- OpenAPI / Internal gRPC for inter-service communication
+
+---
+
+## [0.1.5] - 2026-06-24
+
+### Fixed
+- **CRITICAL: ClearChargingProfile parser crash** - Huawei charger firmware parser crashes when `ClearChargingProfile` is sent with empty payload `{}` or missing required fields (id, connectorId, chargingProfilePurpose). This was blocking HYBRID and GREEN charging modes. Now sends explicit JSON structure matching Huawei parser expectations.
+  - Impact: Fixes charger blocking state that prevented any charging after profile operations
+  - Root cause: C++ parser expects fields at fixed line offsets; any omission causes deserialization failure
+  - Solution: Replace `{}` with explicit `{ id: 100, connectorId: 0, chargingProfilePurpose: "TxDefaultProfile" }` in both `clearChargingLimit()` and smart-charging-disabled path
+
+### Changed
+- `clearChargingLimit()` now includes explicit `id: 100` field when clearing TxDefaultProfile
+
+---
+
 ## [0.1.4] - 2026-06-24
 
 ### Fixed

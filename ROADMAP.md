@@ -8,15 +8,17 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## Current Status
 
-**v0.1.4** (2026-06-24)
+**v0.1.5** (2026-06-24) — 🔥 CRITICAL BUG FIX
+- ✅ **FIXED**: ClearChargingProfile parser crash that was blocking HYBRID/GREEN modes
 - ✅ Modular architecture (3 independent services)
 - ✅ Modbus collector with exponential backoff recovery
 - ✅ OCPP 1.6 charger with smart modes (FAST/GREEN/HYBRID)
 - ✅ Real-time dashboard with health monitoring
 - ✅ **DevOps Phase 1**: CI/CD pipeline with multi-arch Docker builds and GHCR publication
 - ✅ **Hotfix v0.1.3**: Corrected Watchtower GHCR image reference
-- ✅ **Hotfix v0.1.4**: Corrected Watchtower tag to `:latest` (only available in GHCR)
-- ⚠️ **Charger communication broken** (root cause TBD)
+- ✅ **Hotfix v0.1.4**: Corrected Watchtower tag to `:latest`
+- ✅ **Hotfix v0.1.5**: Fixed ClearChargingProfile JSON structure (Huawei parser crash)
+- 🟢 **Status**: Ready for HYBRID/GREEN testing after rebuild
 
 ---
 
