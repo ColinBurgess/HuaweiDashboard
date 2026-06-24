@@ -4,6 +4,7 @@
   "private": true,
   "version": "0.1.1",
   "type": "module",
+  "packageManager": "pnpm@9.x.x",
   "scripts": {
     "dev": "tsx backend/server.ts",
     "build": "vite build",

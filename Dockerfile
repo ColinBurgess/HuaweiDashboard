@@ -5,9 +5,9 @@ FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Enable and prepare pnpm via corepack (included in Node.js 16+)
-# More efficient than npm install -g, no npm dependency
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Enable pnpm via corepack (included in Node.js 16+)
+# Corepack reads packageManager field from package.json for version
+RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -23,9 +23,9 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Enable and prepare pnpm via corepack (included in Node.js 16+)
-# More efficient than npm install -g, no npm dependency
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Enable pnpm via corepack (included in Node.js 16+)
+# Corepack reads packageManager field from package.json for version
+RUN corepack enable
 
 # Copiar manifiestos de dependencias
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
