@@ -101,16 +101,17 @@ services:
       retries: 5
 
 # =========================================================
-  # Watchtower: Reconciliación automática (Mantenido para Docker moderno)
+  # Watchtower: Reconciliación automática (Fork mantenido)
   # =========================================================
   watchtower:
-    # Community-maintained fork with active updates (nickfedor/watchtower)
-    # Pinned to v1.18.1 for reproducibility (avoids :latest drift)
-    image: nickfedor/watchtower:v1.18.1
+    # Community-maintained fork hosted in GitHub Container Registry
+    # Pinned to v1.18.1 for reproducibility (prevents :latest drift)
+    image: ghcr.io/nicholas-fedor/watchtower:v1.18.1
     container_name: huawei-watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # Comprueba el registro cada 10 minutos (600s) y borra imágenes antiguas
     command: --interval 600 --cleanup
     profiles:
       - modular
