@@ -9,6 +9,7 @@ charger-state.json
 charger-state.json.tmp
 *.log
 storage/
+scratch/
 .DS_Store
 
 # Package manager lock files - keep pnpm-lock.yaml, ignore npm

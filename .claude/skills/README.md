@@ -2,12 +2,14 @@
 
 This directory contains **specialized guides** (skills) designed to help AI agents and developers understand the HuaweiDashboard codebase, troubleshoot issues, and implement features correctly.
 
+All skills use the **folder/SKILL.md structure** for auto-discovery by VS Code.
+
 ## When to Use These Skills
 
 When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 1. **Reference them in your prompts**: 
-   > "Según HUAWEI-MODBUS-COLLECTOR.md, ¿por qué el collector..."
+   > "Según huawei-modbus-collector skill, ¿por qué el collector..."
    > "Using the IPC skill, explain how field ownership works..."
 
 2. **They'll be auto-loaded into context** when the agent detects this repository
@@ -18,7 +20,7 @@ When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 ## 📚 Skills Reference
 
-### [HUAWEI-IPC-STATE-MANAGEMENT.md](./HUAWEI-IPC-STATE-MANAGEMENT.md)
+### huawei-ipc-state-management/
 **For understanding inter-process communication between services**
 
 - How the file-based IPC works (live-state-*.json)
@@ -35,7 +37,7 @@ When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 ---
 
-### [HUAWEI-MODBUS-COLLECTOR.md](./HUAWEI-MODBUS-COLLECTOR.md)
+### huawei-modbus-collector/
 **For everything about Modbus polling and reconnection logic**
 
 - Service lifecycle (startup → polling → reconnection)
@@ -55,7 +57,7 @@ When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 ---
 
-### [HUAWEI-OCPP-CHARGER.md](./HUAWEI-OCPP-CHARGER.md)
+### huawei-ocpp-charger/
 **For OCPP 1.6 protocol and smart charging modes**
 
 - OCPP message types (BootNotification, SetChargingProfile, RemoteStart, etc.)
@@ -75,7 +77,7 @@ When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 ---
 
-### [HUAWEI-DOCKER-DEPLOYMENT.md](./HUAWEI-DOCKER-DEPLOYMENT.md)
+### huawei-docker-deployment/
 **For containerization and deployment**
 
 - Monolith vs Modular deployment modes
@@ -95,7 +97,7 @@ When an AI agent (Copilot, Claude, etc.) is helping you with this repository:
 
 ---
 
-### [HUAWEI-DEBUGGING-CHECKLIST.md](./HUAWEI-DEBUGGING-CHECKLIST.md)
+### huawei-debugging-checklist/
 **Systematic troubleshooting guide for any issue**
 
 - General debugging workflow (is it running? → check logs → inspect state)

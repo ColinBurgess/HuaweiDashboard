@@ -1,7 +1,7 @@
 /**
  * Service and Application Version Management
  * Centralized versioning for the dashboard and all microservices
- * 
+ *
  * Update these versions when you make significant changes to each service.
  * Format: MAJOR.MINOR.PATCH (SemVer)
  */
@@ -17,10 +17,10 @@ export const APP_VERSION = packageJson.version;
 export const SERVICE_VERSIONS = {
   // Modbus TCP polling and telemetry persistence
   collector: '1.1.0',
-  
+
   // OCPP 1.6 charger server and smart charging
   charger: '1.0.1',
-  
+
   // Express API, WebSocket, and dashboard UI
   dashboard: '1.0.0',
 } as const;
