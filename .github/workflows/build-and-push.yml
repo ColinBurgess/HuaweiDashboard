@@ -30,12 +30,10 @@ jobs:
         uses: actions/checkout@v4
 
       # ========================================================================
-      # 1. Configurar pnpm oficialmente (Recomendado antes de Setup Node)
+      # 1. Configurar pnpm oficialmente (Lee versión del package.json)
       # ========================================================================
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       # ========================================================================
       # 2. Configurar Node.js y activar la caché de pnpm automáticamente
