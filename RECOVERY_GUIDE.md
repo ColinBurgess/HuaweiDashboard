@@ -1,5 +1,36 @@
 # Recovery Guide - Charger Issues
 
+## 🔴 CRITICAL BUG FIXED (2026-06-24): ClearChargingProfile Parser Crash
+
+**Status**: ✅ FIXED in commit 6eeca4b
+
+### What Was The Problem?
+When server sent `ClearChargingProfile` with:
+- Empty payload `{}`
+- Missing required fields (id, connectorId, chargingProfilePurpose)
+
+The Huawei charger's C++ parser would **crash** → charger enters **BLOCKED state** → refuses all commands
+
+### Why HYBRID Charging Was Failing
+1. Smart charging tried to clear profiles before starting session
+2. Sent malformed `ClearChargingProfile` (empty or missing id field)
+3. Charger parser crash → charger BLOCKED
+4. Appeared as "charger won't charge" (powerW stuck at 0W)
+
+### How It Was Fixed
+All `ClearChargingProfile` calls now send explicit JSON:
+```json
+{
+  "id": 100,
+  "connectorId": 0,
+  "chargingProfilePurpose": "TxDefaultProfile"
+}
+```
+
+**Impact**: HYBRID/GREEN modes should now work correctly.
+
+---
+
 ## 🔴 Current Issue (Updated 2026-06-19 - REAL DATA)
 
 ### What Happened

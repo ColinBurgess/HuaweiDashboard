@@ -630,6 +630,7 @@ function clearChargingLimit(): boolean {
     return false;
   }
   const payload = {
+    id: 100,  // CRITICAL: Huawei parser requires this field; omitting causes C++ parser crash
     connectorId: 1,
     chargingProfilePurpose: 'TxDefaultProfile',
     stackLevel: 1,
@@ -1202,9 +1203,15 @@ if (ocppWss) {
 
     if (!OCPP_SMART_CHARGING_ENABLED) {
       // Wipe any charging profiles left over from previous smart-charging sessions.
-      // An empty ClearChargingProfile payload removes ALL installed profiles, so the
-      // charger behaves like the original pre-refactor flow (no imposed limits).
-      sendOcppCall(ws, chargePointId, 'ClearChargingProfile', {}, 'clear ALL charging profiles (smart charging disabled)');
+      // CRITICAL FIX: Must send explicit fields (id, connectorId, chargingProfilePurpose)
+      // because Huawei's C++ parser crashes on empty payload. Omitting any field causes parser to fail.
+      // See: Huawei charger parser expects specific keys at lines 38, 46, 54, 64
+      const clearAllPayload = {
+        id: 100,  // Must be explicitly set (not omitted)
+        connectorId: 0,  // 0 = applies to all connectors (removes all profiles)
+        chargingProfilePurpose: 'TxDefaultProfile',  // Must be present
+      };
+      sendOcppCall(ws, chargePointId, 'ClearChargingProfile', clearAllPayload, 'clear ALL charging profiles (smart charging disabled)');
     }
 
     reconcileChargerControlState('WebSocketConnected');
