@@ -289,6 +289,12 @@ function normalizeChargingRateUnit(rawValue?: string): 'A' | 'W' | undefined {
 /**
  * Get the preferred charging rate unit for a charger
  * Priority: env config > charger reported config > default (Amps)
+ *
+ * CHARGER-SPECIFIC NOTES:
+ * - CP001 (wallbox charger): ChargingScheduleAllowedChargingRateUnit = 'Power'
+ *   Always returns 'W' for this charger. Do NOT use 'A' (Amps) as the rate unit.
+ * - CP001 also reports: ConnectorSwitch3to1PhaseSupported = false
+ *   This means dynamic phase switching is NOT available, limiting solar load-balancing options.
  */
 function getPreferredProbeRateUnit(chargePointId: string): 'A' | 'W' {
   if (OCPP_SMART_PROBE_RATE_UNIT === 'w' || OCPP_SMART_PROBE_RATE_UNIT === 'power') {
@@ -338,14 +344,12 @@ function logGetConfigurationResult(chargePointId: string, result: GetConfigurati
 // ============================================================================
 
 const SMART_CHARGING_CONFIG_KEYS = [
-  'SupportedFeatureProfiles',
-  'SmartChargingEnabled',
-  'ChargeProfileMaxStackLevel',
-  'ChargingProfileMaxStackLevel',
-  'ChargingScheduleAllowedChargingRateUnit',
-  'ChargingScheduleMaxPeriods',
-  'MaxChargingProfilesInstalled',
-  'ConnectorSwitch3to1PhaseSupported',
+  'SupportedFeatureProfiles',  // Verify if charger supports Smart Charging via profile array
+  'ChargeProfileMaxStackLevel',  // OCPP 1.6 standard key (correct spelling: no 'ing')
+  'ChargingScheduleAllowedChargingRateUnit',  // Determine if charger uses 'A' or 'W' for limits
+  'ChargingScheduleMaxPeriods',  // Maximum number of charging periods per schedule
+  'MaxChargingProfilesInstalled',  // Maximum number of profiles charger can store
+  'ConnectorSwitch3to1PhaseSupported',  // Check if charger supports dynamic phase switching
 ];
 
 function requestSmartChargingConfiguration(ws: WebSocket, chargePointId: string): void {
@@ -375,6 +379,8 @@ function sendSetChargingProfileProbe(
   const sanitizedStackLevel = Math.max(0, Math.min(999, Math.round(stackLevel)));
   const preferredRateUnit = getPreferredProbeRateUnit(chargePointId);
 
+  // CRITICAL: ChargingRateUnit MUST match charger's ChargingScheduleAllowedChargingRateUnit
+  // CP001 requires "W" (Watts), not "A" (Amps). Using wrong unit will cause profile rejection.
   const minWatts = Math.round(GREEN_MIN_CHARGING_AMPS * GREEN_GRID_VOLTAGE);
   const maxWatts = Math.round(GREEN_MAX_CHARGING_AMPS * GREEN_GRID_VOLTAGE);
   const sanitizedLimitA = Math.max(GREEN_MIN_CHARGING_AMPS, Math.min(GREEN_MAX_CHARGING_AMPS, Math.round(targetAmps)));
@@ -555,6 +561,13 @@ function sendRemoteStopTransaction(): boolean {
 /**
  * Send charging limit (SetChargingProfile) to charger
  * Sets the maximum current/power for the charging transaction
+ *
+ * DESIGN NOTES:
+ * - The ChargingRateUnit MUST match the charger's ChargingScheduleAllowedChargingRateUnit config
+ * - CP001 requires "W" (Watts/Power) not "A" (Amps) as the limiting unit
+ * - If charger ever returns different ChargingScheduleAllowedChargingRateUnit, update getPreferredProbeRateUnit()
+ * - ConnectorSwitch3to1PhaseSupported indicates if dynamic phase-switching is available for load-balancing
+ *   CP001 has this disabled (false), so phase count optimization is not possible for this charger
  */
 function sendChargingLimit(amps: number): boolean {
   if (!OCPP_SMART_CHARGING_ENABLED) {
