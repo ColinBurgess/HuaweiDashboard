@@ -88,8 +88,6 @@ jobs:
           dockerfile: Dockerfile
           ignore: DL3008
           # DL3008: Ignorar apt-get pin en imagen slim (no es crítico, imagen oficial de Node.js)
-          # DL3009: Se removió - ahora pinneamos pnpm@9 explícitamente
-          # DL3016: Se removió - ahora pinneamos versiones en npm install
 
       # ========================================================================
       # Compilación local (opcional: verificar que compila antes de dockerizar)
