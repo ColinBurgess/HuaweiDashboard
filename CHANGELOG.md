@@ -17,11 +17,18 @@ Each release section includes:
 
 ---
 
+## [0.1.4] - 2026-06-24
+
+### Fixed
+- **Watchtower version tag**: Corrected from non-existent `v1.18.1` to `:latest` (only tag published by nicholas-fedor in GHCR)
+- Updated docker-compose comments to clarify GHCR fork only publishes `:latest` tag
+
+---
+
 ## [0.1.3] - 2026-06-24
 
 ### Fixed
 - **Watchtower image reference**: Corrected from `nickfedor/watchtower` to proper GHCR registry path `ghcr.io/nicholas-fedor/watchtower`
-- **Watchtower version pinning**: Explicitly pin to v1.18.1 instead of `:latest` to prevent unexpected automatic updates and ensure reproducible deployments
 
 ---
 

@@ -8,13 +8,14 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## Current Status
 
-**v0.1.3** (2026-06-24)
+**v0.1.4** (2026-06-24)
 - ✅ Modular architecture (3 independent services)
 - ✅ Modbus collector with exponential backoff recovery
 - ✅ OCPP 1.6 charger with smart modes (FAST/GREEN/HYBRID)
 - ✅ Real-time dashboard with health monitoring
 - ✅ **DevOps Phase 1**: CI/CD pipeline with multi-arch Docker builds and GHCR publication
-- ✅ **Hotfix**: Corrected Watchtower GHCR image reference and version pinning
+- ✅ **Hotfix v0.1.3**: Corrected Watchtower GHCR image reference
+- ✅ **Hotfix v0.1.4**: Corrected Watchtower tag to `:latest` (only available in GHCR)
 - ⚠️ **Charger communication broken** (root cause TBD)
 
 ---
