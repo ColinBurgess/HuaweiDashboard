@@ -91,12 +91,6 @@ let firstTelemetrySyncLogged = false;
 let consecutiveModbusTimeouts = 0;
 let lastSuccessfulReadTime = 0;
 
-// Night Mode Detection (suppress false disconnect alerts when inverter is in standby)
-let lastActivePowerReadingTime = 0; // Last time we had measurable power generation
-let isInverterInNightMode = false; // True if no power for 1+ hour (expected standby)
-const NIGHT_MODE_THRESHOLD_MS = 3600000; // 1 hour of zero power = night mode
-const MIN_ACTIVE_POWER_W = 50; // Threshold to consider inverter "active"
-
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -173,12 +167,9 @@ function handleModbusError(err: any) {
   modbusConsecutiveConnectionFailures++;
   console.error(`[MODBUS ERROR] Connection failed (attempt #${modbusConsecutiveConnectionFailures}):`, err.message ?? err);
 
-  // Only alert if inverter should be active (day time, not night mode)
-  if (isTelegramEnabled() && !hasAlertedDisconnection && !isInverterInNightMode) {
+  if (isTelegramEnabled() && !hasAlertedDisconnection) {
     alertInverterDisconnected().catch(err => console.error('Failed to send disconnection alert:', err));
     hasAlertedDisconnection = true;
-  } else if (isInverterInNightMode) {
-    console.log('⚪ [NIGHT MODE] Inverter disconnection suppressed (expected standby)');
   }
 
   // Rotate ports on failure
@@ -341,7 +332,7 @@ async function pollInverter() {
 
     // Daily Yield
     inverterData.dailyYield = i32FromRegs([regs1[32114 - 32016], regs1[32115 - 32016]]) / 100;
-
+    
     // Reset timeout counter on successful read
     consecutiveModbusTimeouts = 0;
     lastSuccessfulReadTime = Date.now();
@@ -429,15 +420,6 @@ async function pollInverter() {
 
   // Monitor PV status for alarms
   monitorPvStatus();
-
-  // Update night mode tracking: if active power > threshold, we're in day mode
-  if (inverterData.activePower >= MIN_ACTIVE_POWER_W) {
-    lastActivePowerReadingTime = Date.now();
-    isInverterInNightMode = false;
-  } else if (Date.now() - lastActivePowerReadingTime > NIGHT_MODE_THRESHOLD_MS) {
-    // No significant power for 1+ hour → night mode (expected standby)
-    isInverterInNightMode = true;
-  }
 
   // Validate that we have enough data for history recording
   const hasValidHistorySample = (

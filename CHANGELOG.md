@@ -20,11 +20,6 @@ Each release section includes:
 ## [0.1.2] - Unreleased
 
 ### Fixed
-- **CRITICAL**: Fixed false disconnection alerts at night (3+ AM, etc.)
-  - Inverter enters "night mode" when no power generation detected for 1+ hour (expected standby)
-  - Alerts suppressed during night mode to prevent false "Inversor Desconectado" → "Inversor Reconectado" pairs
-  - Disconnection alerts still fire immediately during daytime (when inverter should be active)
-  - Detector resets automatically when `activePower ≥ 50W` (solar generation detected)
 - **CRITICAL**: Fixed consumption calculation to include EV charger power. Previously the chart only showed house load, excluding car charging consumption. Now `consumption = houseLoad + evLoad` correctly accounts for both.
 
 ---
