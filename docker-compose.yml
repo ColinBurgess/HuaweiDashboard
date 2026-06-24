@@ -100,16 +100,17 @@ services:
       timeout: 5s
       retries: 5
 
-  # =========================================================
-  # Watchtower: Automatic image updates (GitOps)
+# =========================================================
+  # Watchtower: Reconciliación automática (Mantenido para Docker moderno)
   # =========================================================
   watchtower:
-    image: containrrr/watchtower:latest
+    # Community-maintained fork with active updates (nickfedor/watchtower)
+    # Pinned to v1.18.1 for reproducibility (avoids :latest drift)
+    image: nickfedor/watchtower:v1.18.1
     container_name: huawei-watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    # Check registry every 10 minutes (600s) and cleanup old images to save disk space
     command: --interval 600 --cleanup
     profiles:
       - modular
