@@ -52,16 +52,16 @@
    **Examples**:
    ```
    feat: add GitHub Actions CI/CD pipeline
-   
+
    Implement automated validation and multi-arch Docker builds with GHCR publication
    Includes: ESLint, TypeScript type-check, Hadolint, semantic versioning
-   
+
    Closes #42
    ```
 
    ```
    docs: update ROADMAP to mark DevOps Phase 1 complete
-   
+
    - Updated Current Status to v0.1.2
    - All CI/CD features implemented and tested
    - Ready for Phase 2 deployment automation

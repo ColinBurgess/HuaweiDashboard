@@ -82,9 +82,17 @@ let pvConnectionStatusPrevious = true;
 let pvStringLossAlarmPrevious = false;
 let hasAlertedPvDisconnection = false;
 let hasAlertedPvStringLoss = false;
-let pvStatusRegistersAvailable = false;
+let pvConnectionStatusReadAt = 0;
+let pvStringLossAlarmReadAt = 0;
+let pvDisconnectionPendingSince = 0;
+let pvReconnectionPendingSince = 0;
+let pvStringLossPendingSince = 0;
 const SERVICE_START_TIME = Date.now();
-const PV_STATUS_GRACE_PERIOD_MS = 30000; // 30 seconds to ignore transient state changes on startup
+const PV_STATUS_GRACE_PERIOD_MS = Math.max(0, Number(process.env.PV_ALERT_STARTUP_GRACE_MS ?? 60000));
+const PV_DISCONNECT_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_DISCONNECT_CONFIRM_MS ?? 180000));
+const PV_RECONNECT_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_RECONNECT_CONFIRM_MS ?? 60000));
+const PV_STRING_LOSS_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_STRING_LOSS_CONFIRM_MS ?? 60000));
+const PV_STATUS_MAX_AGE_MS = Math.max(5000, Number(process.env.PV_ALERT_STATUS_MAX_AGE_MS ?? 15000));
 
 // Device Status Monitoring (Register 32089)
 // Used to differentiate between Standby (expected offline) vs actual disconnection
@@ -283,42 +291,96 @@ if (socket) {
  * Ignores transient state changes during startup (grace period: 30s)
  */
 function monitorPvStatus() {
-  if (!pvStatusRegistersAvailable) return;
+  const now = Date.now();
+  const connectionStatusIsFresh = now - pvConnectionStatusReadAt <= PV_STATUS_MAX_AGE_MS;
+  const stringAlarmIsFresh = now - pvStringLossAlarmReadAt <= PV_STATUS_MAX_AGE_MS;
+  const isWithinGracePeriod = now - SERVICE_START_TIME < PV_STATUS_GRACE_PERIOD_MS;
 
-  // Ignore state transitions during startup grace period (prevents false alerts on service restart)
-  const isWithinGracePeriod = Date.now() - SERVICE_START_TIME < PV_STATUS_GRACE_PERIOD_MS;
   if (isWithinGracePeriod) {
-    // Still update the previous state to prepare for post-grace-period monitoring
-    pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
-    pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
+    if (connectionStatusIsFresh) pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
+    if (stringAlarmIsFresh) pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
     return;
   }
 
-  if (inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
+  if (connectionStatusIsFresh && inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
     pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
 
-    if (!inverterData.pvConnectionStatus && !hasAlertedPvDisconnection) {
-      console.error('🔴 PV CONNECTION LOST - Automatico has tripped!');
-      alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
-      hasAlertedPvDisconnection = true;
-    } else if (inverterData.pvConnectionStatus && hasAlertedPvDisconnection) {
-      console.log('🟢 PV CONNECTION RESTORED');
-      alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
-      hasAlertedPvDisconnection = false;
+    if (!inverterData.pvConnectionStatus) {
+      pvReconnectionPendingSince = 0;
+      if (!hasAlertedPvDisconnection && !STANDBY_STATES.includes(lastInverterStatus)) {
+        pvDisconnectionPendingSince = now;
+        console.warn(`[PV] Connection loss pending confirmation (${PV_DISCONNECT_CONFIRM_MS}ms)`);
+      }
+    } else {
+      pvDisconnectionPendingSince = 0;
+      if (hasAlertedPvDisconnection) {
+        pvReconnectionPendingSince = now;
+        console.log(`[PV] Connection recovery pending confirmation (${PV_RECONNECT_CONFIRM_MS}ms)`);
+      }
     }
   }
 
-  if (inverterData.pvStringLossAlarm !== pvStringLossAlarmPrevious) {
+  if (
+    connectionStatusIsFresh
+    && !inverterData.pvConnectionStatus
+    && !hasAlertedPvDisconnection
+    && pvDisconnectionPendingSince === 0
+    && !STANDBY_STATES.includes(lastInverterStatus)
+  ) {
+    pvDisconnectionPendingSince = now;
+    console.warn(`[PV] Connection loss pending confirmation (${PV_DISCONNECT_CONFIRM_MS}ms)`);
+  }
+
+  if (
+    connectionStatusIsFresh
+    && !inverterData.pvConnectionStatus
+    && pvDisconnectionPendingSince > 0
+    && now - pvDisconnectionPendingSince >= PV_DISCONNECT_CONFIRM_MS
+  ) {
+    console.error('🔴 PV CONNECTION LOSS CONFIRMED');
+    alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
+    hasAlertedPvDisconnection = true;
+    pvDisconnectionPendingSince = 0;
+  }
+
+  if (
+    connectionStatusIsFresh
+    && inverterData.pvConnectionStatus
+    && pvReconnectionPendingSince > 0
+    && now - pvReconnectionPendingSince >= PV_RECONNECT_CONFIRM_MS
+  ) {
+    console.log('🟢 PV CONNECTION RECOVERY CONFIRMED');
+    alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
+    hasAlertedPvDisconnection = false;
+    pvReconnectionPendingSince = 0;
+  }
+
+  if (stringAlarmIsFresh && inverterData.pvStringLossAlarm !== pvStringLossAlarmPrevious) {
     pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
 
     if (inverterData.pvStringLossAlarm && !hasAlertedPvStringLoss) {
-      console.error('🔴 PV STRING LOSS DETECTED - Alarm ID: 2015');
-      alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
-      hasAlertedPvStringLoss = true;
-    } else if (!inverterData.pvStringLossAlarm && hasAlertedPvStringLoss) {
+      pvStringLossPendingSince = now;
+      console.warn(`[PV] String loss alarm pending confirmation (${PV_STRING_LOSS_CONFIRM_MS}ms)`);
+    } else if (!inverterData.pvStringLossAlarm) {
+      pvStringLossPendingSince = 0;
+    }
+
+    if (!inverterData.pvStringLossAlarm && hasAlertedPvStringLoss) {
       console.log('🟢 PV STRING LOSS CLEARED');
       hasAlertedPvStringLoss = false;
     }
+  }
+
+  if (
+    stringAlarmIsFresh
+    && inverterData.pvStringLossAlarm
+    && pvStringLossPendingSince > 0
+    && now - pvStringLossPendingSince >= PV_STRING_LOSS_CONFIRM_MS
+  ) {
+    console.error('🔴 PV STRING LOSS CONFIRMED - Alarm ID: 2015');
+    alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
+    hasAlertedPvStringLoss = true;
+    pvStringLossPendingSince = 0;
   }
 }
 
@@ -439,7 +501,7 @@ async function pollInverter() {
     const state2Res = await client.readHoldingRegisters(32002, 1);
     const state2Value = state2Res.response.body.values[0];
     inverterData.pvConnectionStatus = Boolean((state2Value >> 1) & 1);
-    pvStatusRegistersAvailable = true;
+    pvConnectionStatusReadAt = Date.now();
   } catch (err) {}
 
   await delay(60);
@@ -449,7 +511,7 @@ async function pollInverter() {
     const alarm3Res = await client.readHoldingRegisters(32010, 1);
     const alarm3Value = alarm3Res.response.body.values[0];
     inverterData.pvStringLossAlarm = Boolean((alarm3Value >> 6) & 1);
-    pvStatusRegistersAvailable = true;
+    pvStringLossAlarmReadAt = Date.now();
   } catch (err) {}
 
   // Read battery power and SOC (if enabled)

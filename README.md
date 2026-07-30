@@ -38,7 +38,13 @@ El proyecto ha evolucionado de un monolito a una arquitectura desacoplada que pu
 - **Dashboard UI**: Interfaz web (React) y API de consulta.
 
 ### Comunicación Inter-procesos (IPC)
-Los servicios se comunican mediante un **archivo de estado compartido** (`storage/data/live-state.json`). Cada proceso carga este archivo periódicamente, actualiza su sección de responsabilidad (latidos, telemetría o estado del cargador) y guarda el resultado. Este mecanismo garantiza que el sistema sea resiliente y no dependa de bases de datos externas para la coordinación básica.
+Los servicios se comunican mediante **archivos de estado separados por servicio**:
+
+- `storage/data/live-state-collector.json`: telemetría y estado del inversor.
+- `storage/data/live-state-charger.json`: estado del cargador.
+- `storage/data/live-state-dashboard.json`: comandos del usuario.
+
+Cada proceso es el único propietario y escritor de su archivo. Aproximadamente cada segundo carga los archivos de los otros servicios, combina sus datos en memoria e ignora su propio archivo para evitar sobrescribir estado vivo con información persistida antigua. Las escrituras son atómicas y este aislamiento evita colisiones entre procesos sin depender de una base de datos externa.
 
 ## Capacidades principales
 
@@ -113,6 +119,12 @@ El dashboard puede enviar notificaciones automáticas a Telegram para eventos cr
 | `TELEGRAM_BOT_TOKEN` | Token del bot (obtenido de @BotFather) |
 | `TELEGRAM_CHAT_ID` | ID del grupo o chat privado |
 | `TELEGRAM_ALERTS_ENABLED` | `true` o `false` para activar/desactivar |
+| `TELEGRAM_ALERT_THROTTLE_MS` | Intervalo mínimo entre alertas del mismo tipo (por defecto, 30 minutos) |
+| `PV_ALERT_STARTUP_GRACE_MS` | Tiempo sin evaluar cambios tras arrancar (por defecto, 60 segundos) |
+| `PV_ALERT_DISCONNECT_CONFIRM_MS` | Persistencia exigida para confirmar pérdida PV (por defecto, 3 minutos) |
+| `PV_ALERT_RECONNECT_CONFIRM_MS` | Persistencia exigida para confirmar recuperación (por defecto, 1 minuto) |
+| `PV_ALERT_STRING_LOSS_CONFIRM_MS` | Persistencia exigida para confirmar la alarma 2015 (por defecto, 1 minuto) |
+| `PV_ALERT_STATUS_MAX_AGE_MS` | Antigüedad máxima aceptada para una lectura de estado (por defecto, 15 segundos) |
 
 **Cómo configurar Telegram**:
 
@@ -156,7 +168,7 @@ docker compose exec inverter-collector pnpm tsx backend/scripts/test_telegram_al
 
 Este script enviará todas las alertas disponibles a tu Telegram para verificar que está todo configurado.
 
-**Nota**: Las alertas se envían con un intervalo mínimo de 30-60 segundos entre el mismo tipo de alerta para evitar spam.
+**Nota**: Las alertas PV se confirman durante varios ciclos, ignoran el estado nocturno de espera y descartan lecturas obsoletas. Las recuperaciones solo se notifican después de una pérdida confirmada. Además, las alertas del mismo tipo tienen por defecto un intervalo mínimo de 30 minutos.
 
 ### Servidor OCPP
 

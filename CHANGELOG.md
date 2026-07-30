@@ -25,6 +25,15 @@ Each release section includes:
 
 ---
 
+## [0.1.6] - 2026-07-30
+
+### Fixed
+- **Photovoltaic alert false positives**: Require fresh readings and persistent confirmation before notifying about PV disconnections, recoveries, or string-loss alarms. Expected inverter standby states and startup transitions are ignored.
+
+### Changed
+- Added configurable confirmation windows, freshness limits, startup grace period, and Telegram alert throttling.
+- Updated PV alert messages to describe confirmed inverter telemetry instead of asserting a specific electrical fault.
+
 ## [0.1.5] - 2026-06-24
 
 ### Fixed

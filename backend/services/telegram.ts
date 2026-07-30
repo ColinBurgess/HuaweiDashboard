@@ -9,7 +9,10 @@ const TELEGRAM_ALERTS_ENABLED = String(process.env.TELEGRAM_ALERTS_ENABLED ?? 'f
 
 // Throttle tracking to avoid spam
 const alertThrottle = new Map<string, number>();
-const THROTTLE_DURATION_MS = 5 * 60 * 1000; // 5 minutes between same alert type
+const THROTTLE_DURATION_MS = Math.max(
+  0,
+  Number(process.env.TELEGRAM_ALERT_THROTTLE_MS ?? 30 * 60 * 1000),
+);
 
 export interface TelegramAlert {
   type: 'inverter_disconnected' | 'inverter_reconnected' | 'modbus_error' | 'system_info' | 'pv_disconnected' | 'pv_reconnected' | 'pv_string_loss';
@@ -161,8 +164,8 @@ export async function alertSystemInfo(title: string, message: string): Promise<v
 export async function alertPvDisconnected(): Promise<void> {
   await sendTelegramAlert({
     type: 'pv_disconnected',
-    title: '⚠️ PV CONNECTION LOST',
-    message: '🔴 El automático de entrada solar ha saltado!\n\nLa conexión de los paneles solares se ha perdido. Revisa el automático del cuadro eléctrico.',
+    title: 'Pérdida de conexión fotovoltaica',
+    message: 'El inversor ha informado de una pérdida persistente de la conexión fotovoltaica durante el periodo de funcionamiento.\n\nRevisa el inversor, las protecciones y el cableado de los paneles. La causa exacta no puede determinarse únicamente con la telemetría.',
     severity: 'critical'
   });
 }
@@ -173,8 +176,8 @@ export async function alertPvDisconnected(): Promise<void> {
 export async function alertPvReconnected(): Promise<void> {
   await sendTelegramAlert({
     type: 'pv_reconnected',
-    title: '✅ PV CONNECTION RESTORED',
-    message: '🟢 La conexión de los paneles solares se ha restaurado correctamente.',
+    title: 'Conexión fotovoltaica restaurada',
+    message: 'El inversor vuelve a informar de una conexión fotovoltaica estable.',
     severity: 'info'
   });
 }
@@ -185,8 +188,8 @@ export async function alertPvReconnected(): Promise<void> {
 export async function alertPvStringLoss(): Promise<void> {
   await sendTelegramAlert({
     type: 'pv_string_loss',
-    title: '⚠️ PV STRING LOSS DETECTED',
-    message: '🔴 El inversor detecta pérdida de string (Alarm ID: 2015)\n\nVerifica el cableado y conexiones de los paneles solares.',
+    title: 'Pérdida persistente de string fotovoltaico',
+    message: 'El inversor mantiene activa la alarma de pérdida de string (Alarm ID: 2015).\n\nVerifica el cableado y las conexiones de los paneles solares.',
     severity: 'warning'
   });
 }
