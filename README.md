@@ -170,6 +170,12 @@ Este script enviará todas las alertas disponibles a tu Telegram para verificar 
 
 **Nota**: Las alertas PV se confirman durante varios ciclos, ignoran el estado nocturno de espera y descartan lecturas obsoletas. Las recuperaciones solo se notifican después de una pérdida confirmada. Además, las alertas del mismo tipo tienen por defecto un intervalo mínimo de 30 minutos.
 
+Cada alerta confirmada genera también una entrada `[PV_ALERT_DIAGNOSTIC]` en `storage/logs/combined.jsonl`. Incluye la muestra completa de telemetría PV, estado del inversor, antigüedad de las lecturas, umbrales aplicados, instante inicial y duración de la condición. Puede localizarse con:
+
+```bash
+grep 'PV_ALERT_DIAGNOSTIC' storage/logs/combined.jsonl
+```
+
 ### Servidor OCPP
 
 | Variable | Default | Descripción |
@@ -240,6 +246,18 @@ Genera el bundle del frontend en `dist/`.
 pnpm run lint
 ```
 
+### Tests automatizados
+
+```bash
+# Tests unitarios deterministas
+npm test
+
+# TypeScript y tests
+npm run check
+```
+
+Las pruebas del monitor de alertas simulan el paso del tiempo sin esperas reales y cubren el anochecer, toda la noche en standby, caídas transitorias, pérdida persistente, lecturas obsoletas, recuperación estable y la alarma de pérdida de string.
+
 ### Producción (Docker)
 
 El proyecto está optimizado para ejecutarse mediante `docker-compose` usando **perfiles** para elegir el modo de ejecución:
@@ -255,6 +273,10 @@ Ejecuta todo en un único contenedor (estilo tradicional).
 ```bash
 docker-compose --profile monolith up -d --build
 ```
+
+### Extra documentation
+
+- [Watchtower deployment and automatic updates](docs/WATCHTOWER_DEPLOYMENT.md): how Watchtower works with GHCR, GitHub Actions, Docker Compose, and the HuaweiDashboard production services.
 
 ## Modos de carga EV
 

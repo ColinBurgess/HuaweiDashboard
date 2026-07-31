@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "test": "tsx --test backend/tests/*.test.ts",
+    "check": "npm run lint && npm test",
     "service:inverter": "NODE_ENV=production SERVICE_ROLE=collector tsx backend/server.ts",
     "service:charger": "NODE_ENV=production SERVICE_ROLE=charger tsx backend/server.ts",
     "service:dashboard": "NODE_ENV=production SERVICE_ROLE=dashboard tsx backend/server.ts",

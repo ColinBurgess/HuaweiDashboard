@@ -43,6 +43,7 @@ import {
   alertPvStringLoss,
   isTelegramEnabled,
 } from './telegram.js';
+import { PvAlertMonitor } from './pv-alert-monitor.js';
 
 // ============================================================================
 // MODBUS CLIENT INITIALIZATION
@@ -77,28 +78,22 @@ const MAX_RECONNECT_DELAY_MS = 120000; // 2 minutes
 let lastDisconnectTime = 0;
 let hasAlertedPersistentDisconnection = false;
 
-// PV Status Monitoring
-let pvConnectionStatusPrevious = true;
-let pvStringLossAlarmPrevious = false;
-let hasAlertedPvDisconnection = false;
-let hasAlertedPvStringLoss = false;
 let pvConnectionStatusReadAt = 0;
 let pvStringLossAlarmReadAt = 0;
-let pvDisconnectionPendingSince = 0;
-let pvReconnectionPendingSince = 0;
-let pvStringLossPendingSince = 0;
-const SERVICE_START_TIME = Date.now();
-const PV_STATUS_GRACE_PERIOD_MS = Math.max(0, Number(process.env.PV_ALERT_STARTUP_GRACE_MS ?? 60000));
-const PV_DISCONNECT_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_DISCONNECT_CONFIRM_MS ?? 180000));
-const PV_RECONNECT_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_RECONNECT_CONFIRM_MS ?? 60000));
-const PV_STRING_LOSS_CONFIRM_MS = Math.max(0, Number(process.env.PV_ALERT_STRING_LOSS_CONFIRM_MS ?? 60000));
-const PV_STATUS_MAX_AGE_MS = Math.max(5000, Number(process.env.PV_ALERT_STATUS_MAX_AGE_MS ?? 15000));
 
 // Device Status Monitoring (Register 32089)
 // Used to differentiate between Standby (expected offline) vs actual disconnection
 let lastInverterStatus = -1; // -1 = unknown, 0-3 = Standby, 256-771 = other states
 let lastStatusChangeTime = 0;
 const STANDBY_STATES = [0, 1, 2, 3]; // All Standby variants
+const pvAlertMonitor = new PvAlertMonitor({
+  startupGraceMs: Math.max(0, Number(process.env.PV_ALERT_STARTUP_GRACE_MS ?? 60000)),
+  disconnectConfirmMs: Math.max(0, Number(process.env.PV_ALERT_DISCONNECT_CONFIRM_MS ?? 180000)),
+  reconnectConfirmMs: Math.max(0, Number(process.env.PV_ALERT_RECONNECT_CONFIRM_MS ?? 60000)),
+  stringLossConfirmMs: Math.max(0, Number(process.env.PV_ALERT_STRING_LOSS_CONFIRM_MS ?? 60000)),
+  statusMaxAgeMs: Math.max(5000, Number(process.env.PV_ALERT_STATUS_MAX_AGE_MS ?? 15000)),
+  standbyStatuses: STANDBY_STATES,
+});
 
 // Telemetry
 let firstTelemetrySyncLogged = false;
@@ -285,102 +280,40 @@ if (socket) {
 // PV STATUS MONITORING
 // ============================================================================
 
-/**
- * Monitor PV connection status and string loss alarms
- * Sends Telegram alerts on state transitions
- * Ignores transient state changes during startup (grace period: 30s)
- */
 function monitorPvStatus() {
   const now = Date.now();
-  const connectionStatusIsFresh = now - pvConnectionStatusReadAt <= PV_STATUS_MAX_AGE_MS;
-  const stringAlarmIsFresh = now - pvStringLossAlarmReadAt <= PV_STATUS_MAX_AGE_MS;
-  const isWithinGracePeriod = now - SERVICE_START_TIME < PV_STATUS_GRACE_PERIOD_MS;
+  const events = pvAlertMonitor.evaluate({
+    now,
+    inverterStatus: lastInverterStatus,
+    connectionStatus: inverterData.pvConnectionStatus,
+    connectionStatusReadAt: pvConnectionStatusReadAt,
+    stringLossAlarm: inverterData.pvStringLossAlarm,
+    stringLossAlarmReadAt: pvStringLossAlarmReadAt,
+    inputPowerW: inverterData.inputPower,
+    activePowerW: inverterData.activePower,
+    pv1VoltageV: inverterData.pv1Voltage,
+    pv1CurrentA: inverterData.pv1Current,
+    pv2VoltageV: inverterData.pv2Voltage,
+    pv2CurrentA: inverterData.pv2Current,
+  });
 
-  if (isWithinGracePeriod) {
-    if (connectionStatusIsFresh) pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
-    if (stringAlarmIsFresh) pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
-    return;
-  }
+  for (const event of events) {
+    console.warn('[PV_ALERT_DIAGNOSTIC]', {
+      ...event,
+      confirmedAtIso: new Date(event.confirmedAt).toISOString(),
+      pendingSinceIso: new Date(event.pendingSince).toISOString(),
+    });
 
-  if (connectionStatusIsFresh && inverterData.pvConnectionStatus !== pvConnectionStatusPrevious) {
-    pvConnectionStatusPrevious = inverterData.pvConnectionStatus;
-
-    if (!inverterData.pvConnectionStatus) {
-      pvReconnectionPendingSince = 0;
-      if (!hasAlertedPvDisconnection && !STANDBY_STATES.includes(lastInverterStatus)) {
-        pvDisconnectionPendingSince = now;
-        console.warn(`[PV] Connection loss pending confirmation (${PV_DISCONNECT_CONFIRM_MS}ms)`);
-      }
+    if (event.type === 'pv_disconnected') {
+      console.error('🔴 PV CONNECTION LOSS CONFIRMED');
+      alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
+    } else if (event.type === 'pv_reconnected') {
+      console.log('🟢 PV CONNECTION RECOVERY CONFIRMED');
+      alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
     } else {
-      pvDisconnectionPendingSince = 0;
-      if (hasAlertedPvDisconnection) {
-        pvReconnectionPendingSince = now;
-        console.log(`[PV] Connection recovery pending confirmation (${PV_RECONNECT_CONFIRM_MS}ms)`);
-      }
+      console.error('🔴 PV STRING LOSS CONFIRMED - Alarm ID: 2015');
+      alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
     }
-  }
-
-  if (
-    connectionStatusIsFresh
-    && !inverterData.pvConnectionStatus
-    && !hasAlertedPvDisconnection
-    && pvDisconnectionPendingSince === 0
-    && !STANDBY_STATES.includes(lastInverterStatus)
-  ) {
-    pvDisconnectionPendingSince = now;
-    console.warn(`[PV] Connection loss pending confirmation (${PV_DISCONNECT_CONFIRM_MS}ms)`);
-  }
-
-  if (
-    connectionStatusIsFresh
-    && !inverterData.pvConnectionStatus
-    && pvDisconnectionPendingSince > 0
-    && now - pvDisconnectionPendingSince >= PV_DISCONNECT_CONFIRM_MS
-  ) {
-    console.error('🔴 PV CONNECTION LOSS CONFIRMED');
-    alertPvDisconnected().catch(err => console.error('Failed to send PV disconnection alert:', err));
-    hasAlertedPvDisconnection = true;
-    pvDisconnectionPendingSince = 0;
-  }
-
-  if (
-    connectionStatusIsFresh
-    && inverterData.pvConnectionStatus
-    && pvReconnectionPendingSince > 0
-    && now - pvReconnectionPendingSince >= PV_RECONNECT_CONFIRM_MS
-  ) {
-    console.log('🟢 PV CONNECTION RECOVERY CONFIRMED');
-    alertPvReconnected().catch(err => console.error('Failed to send PV reconnection alert:', err));
-    hasAlertedPvDisconnection = false;
-    pvReconnectionPendingSince = 0;
-  }
-
-  if (stringAlarmIsFresh && inverterData.pvStringLossAlarm !== pvStringLossAlarmPrevious) {
-    pvStringLossAlarmPrevious = inverterData.pvStringLossAlarm;
-
-    if (inverterData.pvStringLossAlarm && !hasAlertedPvStringLoss) {
-      pvStringLossPendingSince = now;
-      console.warn(`[PV] String loss alarm pending confirmation (${PV_STRING_LOSS_CONFIRM_MS}ms)`);
-    } else if (!inverterData.pvStringLossAlarm) {
-      pvStringLossPendingSince = 0;
-    }
-
-    if (!inverterData.pvStringLossAlarm && hasAlertedPvStringLoss) {
-      console.log('🟢 PV STRING LOSS CLEARED');
-      hasAlertedPvStringLoss = false;
-    }
-  }
-
-  if (
-    stringAlarmIsFresh
-    && inverterData.pvStringLossAlarm
-    && pvStringLossPendingSince > 0
-    && now - pvStringLossPendingSince >= PV_STRING_LOSS_CONFIRM_MS
-  ) {
-    console.error('🔴 PV STRING LOSS CONFIRMED - Alarm ID: 2015');
-    alertPvStringLoss().catch(err => console.error('Failed to send PV string loss alert:', err));
-    hasAlertedPvStringLoss = true;
-    pvStringLossPendingSince = 0;
   }
 }
 
