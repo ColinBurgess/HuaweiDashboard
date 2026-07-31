@@ -22,7 +22,7 @@ export const SERVICE_VERSIONS = {
   charger: '1.0.1',
 
   // Express API, WebSocket, and dashboard UI
-  dashboard: '1.0.0',
+  dashboard: '1.0.1',
 } as const;
 
 export type ServiceRole = keyof typeof SERVICE_VERSIONS;

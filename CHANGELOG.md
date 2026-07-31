@@ -25,6 +25,19 @@ Each release section includes:
 
 ---
 
+## [0.1.8] - 2026-07-31
+
+### Added
+- Custom solar-energy favicon, including the supplied PNG artwork, and web app manifest for browser and installed-app identity.
+
+### Fixed
+- Replaced the generic Google AI Studio browser title and icon with HuaweiDashboard branding.
+
+### Changed
+- Updated the dashboard service from `1.0.0` to `1.0.1`.
+
+---
+
 ## [0.1.7] - 2026-07-31
 
 ### Added
