@@ -25,6 +25,21 @@ Each release section includes:
 
 ---
 
+## [0.1.7] - 2026-07-31
+
+### Added
+- Deterministic unit tests for PV alert detection, covering startup, sunset, standby, transient failures, stale readings, persistent faults, recovery, and Huawei alarm 2015.
+- Structured `[PV_ALERT_DIAGNOSTIC]` records with the complete telemetry sample, applied thresholds, reading freshness, inverter state, triggering reason, and confirmation duration.
+
+### Changed
+- Extracted PV alert evaluation into an isolated state monitor to make time-dependent behavior reproducible and testable without Modbus or Telegram.
+- Updated the collector service from `1.1.0` to `1.2.0`.
+
+### Fixed
+- Stale readings now interrupt the continuous confirmation period instead of contributing toward a PV alert.
+
+---
+
 ## [0.1.6] - 2026-07-30
 
 ### Fixed
@@ -360,4 +375,3 @@ git push origin v0.2.0
 - [ ] Run lint: `npm run lint`
 - [ ] Test inverter, charger, and dashboard services
 - [ ] Push to origin with tags: `git push origin master --tags`
-

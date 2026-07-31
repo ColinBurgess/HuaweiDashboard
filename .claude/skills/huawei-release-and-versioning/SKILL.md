@@ -75,7 +75,7 @@
 
 ## 📋 Version Numbering (SemVer 2.0.0)
 
-**Current Version**: v0.1.2 (see `package.json`)
+**Current Version**: v0.1.7 (see `package.json`)
 
 ### When to Bump Version
 

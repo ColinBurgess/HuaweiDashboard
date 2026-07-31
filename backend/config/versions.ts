@@ -16,7 +16,7 @@ export const APP_VERSION = packageJson.version;
  */
 export const SERVICE_VERSIONS = {
   // Modbus TCP polling and telemetry persistence
-  collector: '1.1.0',
+  collector: '1.2.0',
 
   // OCPP 1.6 charger server and smart charging
   charger: '1.0.1',
