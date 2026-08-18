@@ -43,7 +43,7 @@ import {
   alertPvStringLoss,
   isTelegramEnabled,
 } from './telegram.js';
-import { PvAlertMonitor } from './pv-alert-monitor.js';
+import { hasDaylightEvidence, PvAlertMonitor } from './pv-alert-monitor.js';
 
 // ============================================================================
 // MODBUS CLIENT INITIALIZATION
@@ -86,6 +86,7 @@ let pvStringLossAlarmReadAt = 0;
 let lastInverterStatus = -1; // -1 = unknown, 0-3 = Standby, 256-771 = other states
 let lastStatusChangeTime = 0;
 const STANDBY_STATES = [0, 1, 2, 3]; // All Standby variants
+const DAYLIGHT_MIN_PV_VOLTAGE_V = Math.max(0, Number(process.env.PV_ALERT_DAYLIGHT_MIN_PV_VOLTAGE_V ?? 100));
 const pvAlertMonitor = new PvAlertMonitor({
   startupGraceMs: Math.max(0, Number(process.env.PV_ALERT_STARTUP_GRACE_MS ?? 60000)),
   disconnectConfirmMs: Math.max(0, Number(process.env.PV_ALERT_DISCONNECT_CONFIRM_MS ?? 180000)),
@@ -93,6 +94,7 @@ const pvAlertMonitor = new PvAlertMonitor({
   stringLossConfirmMs: Math.max(0, Number(process.env.PV_ALERT_STRING_LOSS_CONFIRM_MS ?? 60000)),
   statusMaxAgeMs: Math.max(5000, Number(process.env.PV_ALERT_STATUS_MAX_AGE_MS ?? 15000)),
   standbyStatuses: STANDBY_STATES,
+  daylightMinPvVoltageV: DAYLIGHT_MIN_PV_VOLTAGE_V,
 });
 
 // Telemetry
@@ -224,7 +226,21 @@ function handleModbusError(err: any) {
   // If inverter is in Standby (states 0-3), timeouts are expected and normal
   // Alert only if: (1) Running/Operating state, or (2) Shutdown/Error state
   const isStandbyState = STANDBY_STATES.includes(lastInverterStatus);
-  const shouldAlert = !isStandbyState && isTelegramEnabled() && !hasAlertedDisconnection;
+  const daylightEvidence = hasDaylightEvidence({
+    now: Date.now(),
+    inverterStatus: lastInverterStatus,
+    connectionStatus: inverterData.pvConnectionStatus,
+    connectionStatusReadAt: pvConnectionStatusReadAt,
+    stringLossAlarm: inverterData.pvStringLossAlarm,
+    stringLossAlarmReadAt: pvStringLossAlarmReadAt,
+    inputPowerW: inverterData.inputPower,
+    activePowerW: inverterData.activePower,
+    pv1VoltageV: inverterData.pv1Voltage,
+    pv1CurrentA: inverterData.pv1Current,
+    pv2VoltageV: inverterData.pv2Voltage,
+    pv2CurrentA: inverterData.pv2Current,
+  }, DAYLIGHT_MIN_PV_VOLTAGE_V);
+  const shouldAlert = !isStandbyState && daylightEvidence && isTelegramEnabled() && !hasAlertedDisconnection;
 
   if (shouldAlert) {
     console.warn('⚠️  ALERT TRIGGERED: Disconnection during expected operating state');
@@ -232,6 +248,8 @@ function handleModbusError(err: any) {
     hasAlertedDisconnection = true;
   } else if (isStandbyState) {
     console.log('⭕ Timeout ignored: Inverter in Standby mode (state ' + lastInverterStatus + ', expected)');
+  } else if (!daylightEvidence) {
+    console.log('⭕ Timeout ignored: No recent daylight evidence (expected no-solar period)');
   }
 
   // Rotate ports on failure

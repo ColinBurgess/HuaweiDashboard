@@ -8,7 +8,8 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## Current Status
 
-**v0.1.5** (2026-06-24) — 🔥 CRITICAL BUG FIX
+**v0.1.9** (2026-08-18) — 🔔 ALERT RELIABILITY FIX
+- ✅ **FIXED**: Suppressed night-time and no-solar false positives while preserving daytime inverter/PV disconnection alerts
 - ✅ **FIXED**: ClearChargingProfile parser crash that was blocking HYBRID/GREEN modes
 - ✅ Modular architecture (3 independent services)
 - ✅ Modbus collector with exponential backoff recovery
@@ -18,7 +19,7 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 - ✅ **Hotfix v0.1.3**: Corrected Watchtower GHCR image reference
 - ✅ **Hotfix v0.1.4**: Corrected Watchtower tag to `:latest`
 - ✅ **Hotfix v0.1.5**: Fixed ClearChargingProfile JSON structure (Huawei parser crash)
-- 🟢 **Status**: Ready for HYBRID/GREEN testing after rebuild
+- 🟢 **Status**: Alert reliability fix released; ready for deployment validation
 
 ---
 

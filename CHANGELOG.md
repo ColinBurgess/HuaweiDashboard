@@ -23,6 +23,15 @@ Each release section includes:
 - Message broker integration (MQTT/Redis) for real-time telemetry
 - OpenAPI / Internal gRPC for inter-service communication
 
+## [0.1.9] - 2026-08-18
+
+### Fixed
+- Prevented Telegram false positives during night-time or no-solar periods by requiring recent daylight evidence before confirming PV or Modbus disconnection alerts.
+
+### Added
+- Added a regression test for stale running inverter states with zero PV readings.
+- Refreshed the HuaweiDashboard troubleshooting, deployment, IPC, Modbus, OCPP, recovery, and release skill guides.
+
 ---
 
 ## [0.1.8] - 2026-07-31

@@ -13,6 +13,7 @@ export interface PvAlertEvent {
     stringLossAlarmIsFresh: boolean;
     stringLossAlarmAgeMs: number;
     inverterIsStandby: boolean;
+    daylightEvidence: boolean;
   };
   thresholds: Omit<PvAlertMonitorConfig, 'standbyStatuses'> & {
     standbyStatuses: readonly number[];
@@ -26,6 +27,7 @@ export interface PvAlertMonitorConfig {
   stringLossConfirmMs: number;
   statusMaxAgeMs: number;
   standbyStatuses: readonly number[];
+  daylightMinPvVoltageV: number;
 }
 
 export interface PvStatusSample {
@@ -41,6 +43,28 @@ export interface PvStatusSample {
   pv1CurrentA?: number;
   pv2VoltageV?: number;
   pv2CurrentA?: number;
+}
+
+export function hasDaylightEvidence(sample: PvStatusSample, minimumPvVoltageV: number): boolean {
+  const solarReadings = [
+    sample.inputPowerW,
+    sample.activePowerW,
+    sample.pv1VoltageV,
+    sample.pv1CurrentA,
+    sample.pv2VoltageV,
+    sample.pv2CurrentA,
+  ];
+
+  if (!solarReadings.some(value => Number.isFinite(value))) return true;
+
+  return (
+    (sample.inputPowerW ?? 0) > 0
+    || (sample.activePowerW ?? 0) > 0
+    || (sample.pv1VoltageV ?? 0) >= minimumPvVoltageV
+    || (sample.pv2VoltageV ?? 0) >= minimumPvVoltageV
+    || (sample.pv1CurrentA ?? 0) > 0
+    || (sample.pv2CurrentA ?? 0) > 0
+  );
 }
 
 export class PvAlertMonitor {
@@ -106,6 +130,7 @@ export class PvAlertMonitor {
     const changed = this.previousConnectionStatus !== undefined
       && sample.connectionStatus !== this.previousConnectionStatus;
     this.previousConnectionStatus = sample.connectionStatus;
+    const daylightEvidence = hasDaylightEvidence(sample, this.config.daylightMinPvVoltageV);
 
     if (changed) {
       if (sample.connectionStatus) {
@@ -121,11 +146,12 @@ export class PvAlertMonitor {
       && !this.disconnectionAlerted
       && this.disconnectionPendingSince === 0
       && !this.isStandby(sample.inverterStatus)
+      && daylightEvidence
     ) {
       this.disconnectionPendingSince = sample.now;
     }
 
-    if (sample.connectionStatus) {
+    if (sample.connectionStatus || !daylightEvidence) {
       this.disconnectionPendingSince = 0;
     }
 
@@ -225,6 +251,7 @@ export class PvAlertMonitor {
         stringLossAlarmIsFresh: this.isFresh(sample.now, sample.stringLossAlarmReadAt),
         stringLossAlarmAgeMs: sample.now - sample.stringLossAlarmReadAt,
         inverterIsStandby: this.isStandby(sample.inverterStatus),
+        daylightEvidence: hasDaylightEvidence(sample, this.config.daylightMinPvVoltageV),
       },
       thresholds: {
         ...this.config,

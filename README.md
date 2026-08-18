@@ -125,6 +125,7 @@ El dashboard puede enviar notificaciones automáticas a Telegram para eventos cr
 | `PV_ALERT_RECONNECT_CONFIRM_MS` | Persistencia exigida para confirmar recuperación (por defecto, 1 minuto) |
 | `PV_ALERT_STRING_LOSS_CONFIRM_MS` | Persistencia exigida para confirmar la alarma 2015 (por defecto, 1 minuto) |
 | `PV_ALERT_STATUS_MAX_AGE_MS` | Antigüedad máxima aceptada para una lectura de estado (por defecto, 15 segundos) |
+| `PV_ALERT_DAYLIGHT_MIN_PV_VOLTAGE_V` | Tensión mínima de string considerada evidencia de radiación durante una desconexión (por defecto, 100 V) |
 
 **Cómo configurar Telegram**:
 
@@ -261,7 +262,6 @@ Las pruebas del monitor de alertas simulan el paso del tiempo sin esperas reales
 ### Producción (Docker)
 
 El proyecto está optimizado para ejecutarse mediante `docker-compose` usando **perfiles** para elegir el modo de ejecución:
-
 #### Modo Modular (Recomendado)
 Separa el sistema en 3 contenedores. Permite actualizar la web sin detener la recogida de datos.
 ```bash

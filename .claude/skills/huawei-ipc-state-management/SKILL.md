@@ -1,172 +1,101 @@
 ---
 name: huawei-ipc-state-management
-description: Guide for understanding and debugging inter-process communication via shared JSON files. Use when adding state fields, debugging inconsistencies, or understanding service data issues.
+description: >-
+  Architectural specification and troubleshooting guide for file-based Inter-Process Communication (IPC) via shared JSON state files.
+  Use this skill whenever modifying state-manager.ts, adding new fields to live-state JSONs, investigating data loss or race conditions across services, or implementing atomic disk writes (.tmp -> rename).
 ---
 
-# Huawei IPC & State Management
+# Huawei IPC & State Management Specification
 
-**Purpose**: Guide for understanding and debugging the inter-process communication layer via shared JSON files.
+## Core IPC Architecture
 
-**When to use this skill**:
-- Adding new fields to shared state
-- Debugging state inconsistencies or race conditions
-- Understanding why a service's data disappears
-- Refactoring IPC layer or migrating to a message broker
-
----
-
-## Architecture Overview
-
-The project uses **file-based IPC** instead of Redis/queues. Each service is the "owner" of specific fields in shared JSON files:
+The project uses a **file-based IPC model** via shared JSON files in `storage/data/`. Rather than using a message broker (e.g., Redis or MQTT), services poll, merge in memory, and persist state once per second.
 
 ```
 storage/data/
-├── live-state-collector.json    ← Inverter polling data + heartbeat
-├── live-state-charger.json      ← Charger status + power, transaction ID
-├── live-state-dashboard.json    ← User commands (start/stop/mode)
-└── charger-state.json           ← Persisted charger config (restored on startup)
-```
-
-### Polling Mechanism
-
-Every **1 second**, each service:
-1. **Loads ALL files** (`loadLiveState()`)
-2. **Merges data in memory** with its own updates
-3. **Saves only its owned fields** (`saveLiveState()`)
-
-```typescript
-// Example: Collector service does this every 1s
-inverterData.pv1Voltage = readFromModbus();
-inverterData.inputPower = readFromModbus();
-// ... update other fields ...
-saveLiveState();  // Only writes: model, pv*, power, grid*, yield, temp, battery, status, services
+├── live-state-collector.json    ← Inverter & Modbus polling data (Owner: collector)
+├── live-state-charger.json      ← OCPP status, power, transaction ID (Owner: charger)
+├── live-state-dashboard.json    ← User action commands & queues (Owner: dashboard)
+└── charger-state.json           ← Persisted charger configuration
 ```
 
 ---
 
-## Field Ownership (Critical)
+## Field Ownership Contract (Strict Enforcement)
 
-Each service **must own** specific fields to prevent overwriting:
+**CRITICAL RULE ("Guerra de Archivos Avoidance"):** A service **MUST ONLY** write to fields it explicitly owns. Violating ownership causes services to overwrite each other's live telemetry in disk state.
 
-| File | Owner (SERVICE_ROLE) | Owned Fields |
-|------|---------------------|--------------|
+| JSON File | Service Owner (`SERVICE_ROLE`) | Owned Fields (Exclusive Write Access) |
+|---|---|---|
 | `live-state-collector.json` | `collector` | `model`, `pv1Voltage`, `pv1Current`, `pv2Voltage`, `pv2Current`, `inputPower`, `activePower`, `gridVoltage`, `gridFrequency`, `temperature`, `status`, `dailyYield`, `batteryPower`, `batterySOC`, `gridPower`, `consumption`, `houseLoad`, `lastUpdate`, `pvConnectionStatus`, `pvStringLossAlarm` |
 | `live-state-charger.json` | `charger` | `cable`, `status`, `chargePointId`, `transactionId`, `startRequested`, `chargingMode`, `appliedCurrentLimitA`, `lastRequestedCurrentLimitA`, `powerW`, `energyWh` |
 | `live-state-dashboard.json` | `dashboard` | `commandQueue`, `chargingMode` (commands only) |
 | `charger-state.json` | `charger` | `chargingMode`, `startRequested`, `appliedCurrentLimitA`, `lastRequestedCurrentLimitA`, `transactionId` |
 
-**Rule**: A service NEVER writes fields it doesn't own. Violation = data gets overwritten.
-
 ---
 
-## Code Patterns
+## Standard Code Patterns
 
-### Loading State (Safe)
+### 1. Atomic Disk Writes (Mandatory)
+
+To prevent partial/corrupted JSON reads during concurrent disk access, **ALL disk writes MUST use temporary files and atomic POSIX renames**:
 
 ```typescript
-// At service startup or every 1s:
-function loadLiveState() {
-  const collector = JSON.parse(fs.readFileSync(COLLECTOR_STATE_PATH, 'utf8'));
-  const charger = JSON.parse(fs.readFileSync(CHARGER_STATE_PATH, 'utf8'));
-  const dashboard = JSON.parse(fs.readFileSync(DASHBOARD_STATE_PATH, 'utf8'));
+import fs from 'fs';
+import path from 'path';
 
-  // Merge all into shared inverterData object
-  Object.assign(inverterData, collector);
-  Object.assign(chargerState, charger);
+export function saveLiveStateAtomic(filePath: string, dataToSave: Record<string, any>): void {
+  const tmpPath = `${filePath}.tmp`;
 
-  // IMPORTANT: If you ARE the charger service, skip loading your own file
-  // to avoid overwriting in-memory state with stale disk data
-  if (process.env.SERVICE_ROLE !== 'charger') {
+  // 1. Write to temporary file
+  fs.writeFileSync(tmpPath, JSON.stringify(dataToSave, null, 2), 'utf8');
+
+  // 2. Atomic rename replaces target file cleanly
+  fs.renameSync(tmpPath, filePath);
+}
+```
+
+### 2. Safe State Loading (Skipping Self-Disk Load)
+
+To prevent overwriting live in-memory telemetry with stale disk data upon polling:
+
+```typescript
+export function loadLiveState(): void {
+  const currentRole = process.env.SERVICE_ROLE || 'monolith';
+
+  // Read collector state
+  if (fs.existsSync(COLLECTOR_STATE_PATH)) {
+    const collector = JSON.parse(fs.readFileSync(COLLECTOR_STATE_PATH, 'utf8'));
+    Object.assign(inverterData, collector);
+  }
+
+  // Read charger state ONLY if this service is NOT the charger itself
+  if (currentRole !== 'charger' && fs.existsSync(CHARGER_STATE_PATH)) {
+    const charger = JSON.parse(fs.readFileSync(CHARGER_STATE_PATH, 'utf8'));
     Object.assign(chargerState, charger);
   }
 }
 ```
 
-### Saving State (Atomic)
+---
 
-```typescript
-function saveLiveState() {
-  const role = process.env.SERVICE_ROLE || 'monolith';
+## IPC Troubleshooting Guide
 
-  // Create snapshot of owned fields
-  const stateToSave = {
-    // Only include fields THIS service owns
-    model: inverterData.model,
-    pv1Voltage: inverterData.pv1Voltage,
-    // ... other owned fields ...
-  };
+### Issue 1: Data Fields Randomly Reset to Zero/Null
+* **Cause:** Cross-writing violation. A non-owner service includes unowned fields in its `saveLiveState()` payload.
+* **Fix:** Check `saveLiveState()` in the offending service. Filter out any fields not listed in the Ownership Matrix.
 
-  // Atomic write: .tmp → rename
-  const tmpPath = STATE_PATH + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(stateToSave, null, 2));
-  fs.renameSync(tmpPath, STATE_PATH);  // Atomic, no partial writes
-}
-```
+### Issue 2: `SyntaxError: Unexpected end of JSON input`
+* **Cause:** Non-atomic file write interrupted during execution.
+* **Fix:** Replace direct `fs.writeFileSync(TARGET)` with `saveLiveStateAtomic()` (`.tmp` → `fs.renameSync`).
+
+### Issue 3: Charger Reverts to Stale Values on Restart
+* **Cause:** Charger service loaded its own disk file on startup instead of keeping active in-memory variables.
+* **Fix:** Ensure `process.env.SERVICE_ROLE === 'charger'` skips loading `live-state-charger.json` into its local primary variables.
 
 ---
 
-## Common Issues & Debugging
+## Associated Code Files
 
-### Issue: Service X's data keeps disappearing
-
-**Cause**: Another service is overwriting it.
-
-**Fix**:
-1. Identify which service owns the missing field (see table above)
-2. Check if another service is writing to that field in `saveLiveState()`
-3. Remove the unauthorized write
-
-```typescript
-// ❌ BAD: Collector writing charger fields
-saveLiveState(); // Should NOT include powerW, transactionId, etc.
-
-// ✅ GOOD: Only write owned fields
-const stateToSave = {
-  model: inverterData.model,
-  inputPower: inverterData.inputPower,
-  // charger fields left out
-};
-```
-
-### Issue: Service reads stale data from disk
-
-**Cause**: Service loads its own .json which has old data.
-
-**Fix**:
-```typescript
-// When loading, skip YOUR OWN service file
-if (process.env.SERVICE_ROLE === 'charger') {
-  // Don't load live-state-charger.json, it's stale
-  // Use in-memory chargerState instead
-}
-```
-
-### Issue: Partial/corrupted JSON on disk (service crashed during write)
-
-**Cause**: Write was not atomic.
-
-**Fix**: Always use `.tmp` → `rename()` pattern:
-```typescript
-fs.writeFileSync(tmpPath, JSON.stringify(data));
-fs.renameSync(tmpPath, finalPath);  // Atomic on POSIX systems
-```
-
----
-
-## Future Improvements
-
-Current IPC via files is **not scalable**. Migration candidates:
-
-1. **Redis**: Simple pub/sub + atomic operations
-2. **gRPC**: Faster inter-process calls for commands
-3. **OpenAPI**: Internal REST API for service discovery
-4. **MQTT**: Real-time telemetry streaming
-
----
-
-## Key Files
-
-- [backend/ipc/state-manager.ts](../backend/ipc/state-manager.ts) → Main implementation
-- [backend/services/inverter-collector.ts](../backend/services/inverter-collector.ts) → Example: Collector ownership
-- [backend/services/ocpp-charger.ts](../backend/services/ocpp-charger.ts) → Example: Charger ownership
-- [Agents.md](../Agents.md) → Historical lessons ("Guerra de Archivos")
+- `backend/ipc/state-manager.ts` → Core IPC loading and saving implementation.
+-

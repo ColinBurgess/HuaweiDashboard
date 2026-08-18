@@ -15,6 +15,7 @@ const config: PvAlertMonitorConfig = {
   stringLossConfirmMs: 100,
   statusMaxAgeMs: 50,
   standbyStatuses: [0, 1, 2, 3],
+  daylightMinPvVoltageV: 100,
 };
 
 function sample(
@@ -68,6 +69,43 @@ describe('PvAlertMonitor', () => {
     assert.deepEqual(eventTypes(collect(monitor, samples)), []);
   });
 
+  test('does not report a night-time loss when the last status is stale running', () => {
+    const monitor = new PvAlertMonitor(config, STARTED_AT);
+    const events = collect(monitor, [
+      sample(1_100, {
+        inverterStatus: 512,
+        inputPowerW: 0,
+        activePowerW: 0,
+        pv1VoltageV: 0,
+        pv1CurrentA: 0,
+        pv2VoltageV: 0,
+        pv2CurrentA: 0,
+      }),
+      sample(1_110, {
+        inverterStatus: 512,
+        connectionStatus: false,
+        inputPowerW: 0,
+        activePowerW: 0,
+        pv1VoltageV: 0,
+        pv1CurrentA: 0,
+        pv2VoltageV: 0,
+        pv2CurrentA: 0,
+      }),
+      sample(1_500, {
+        inverterStatus: 512,
+        connectionStatus: false,
+        inputPowerW: 0,
+        activePowerW: 0,
+        pv1VoltageV: 0,
+        pv1CurrentA: 0,
+        pv2VoltageV: 0,
+        pv2CurrentA: 0,
+      }),
+    ]);
+
+    assert.deepEqual(eventTypes(events), []);
+  });
+
   test('rejects a transient daytime connection drop', () => {
     const monitor = new PvAlertMonitor(config, STARTED_AT);
     const events = collect(monitor, [
@@ -85,10 +123,10 @@ describe('PvAlertMonitor', () => {
     const monitor = new PvAlertMonitor(config, STARTED_AT);
     const events = collect(monitor, [
       sample(1_100),
-      sample(1_110, { connectionStatus: false }),
-      sample(1_300, { inverterStatus: 2, connectionStatus: false }),
-      sample(1_410, { inverterStatus: 2, connectionStatus: false }),
-      sample(2_000, { inverterStatus: 2, connectionStatus: false }),
+      sample(1_110, { connectionStatus: false, pv1VoltageV: 350 }),
+      sample(1_300, { inverterStatus: 2, connectionStatus: false, pv1VoltageV: 350 }),
+      sample(1_410, { inverterStatus: 2, connectionStatus: false, pv1VoltageV: 350 }),
+      sample(2_000, { inverterStatus: 2, connectionStatus: false, pv1VoltageV: 350 }),
     ]);
 
     assert.deepEqual(eventTypes(events), ['pv_disconnected']);
