@@ -344,7 +344,9 @@ function monitorPvStatus() {
  * Reads all registers sequentially with delays between sections
  * Updates inverterData and persists telemetry to history
  */
-async function pollInverter() {
+let pollInFlight = false;
+
+async function pollInverterCycle() {
   if (!inverterData.connected || !client) return;
 
   const sectionReadStatus = {
@@ -572,6 +574,17 @@ async function pollInverter() {
 
   // Write to InfluxDB (if configured and this is the collector role)
   writeToInflux(inverterData);
+}
+
+async function pollInverter() {
+  if (pollInFlight) return;
+
+  pollInFlight = true;
+  try {
+    await pollInverterCycle();
+  } finally {
+    pollInFlight = false;
+  }
 }
 
 // ============================================================================

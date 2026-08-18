@@ -8,7 +8,8 @@ Transform home solar + car charging into an intelligent, self-learning energy ma
 
 ## Current Status
 
-**v0.1.9** (2026-08-18) — 🔔 ALERT RELIABILITY FIX
+**v0.1.10** (2026-08-18) — 🔧 MODBUS POLLING STABILITY FIX
+- ✅ **FIXED**: Serialized collector Modbus polling to prevent concurrent requests from overwhelming the inverter socket
 - ✅ **FIXED**: Suppressed night-time and no-solar false positives while preserving daytime inverter/PV disconnection alerts
 - ✅ **FIXED**: ClearChargingProfile parser crash that was blocking HYBRID/GREEN modes
 - ✅ Modular architecture (3 independent services)

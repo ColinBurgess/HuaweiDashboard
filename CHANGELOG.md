@@ -23,6 +23,11 @@ Each release section includes:
 - Message broker integration (MQTT/Redis) for real-time telemetry
 - OpenAPI / Internal gRPC for inter-service communication
 
+## [0.1.10] - 2026-08-18
+
+### Fixed
+- Serialized Modbus polling so slow or failed reads cannot overlap on the same inverter socket, preventing device-busy responses and cascading `Timeout`/`OutOfSync` errors.
+
 ## [0.1.9] - 2026-08-18
 
 ### Fixed
